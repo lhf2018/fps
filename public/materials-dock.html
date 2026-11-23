@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>雨后码头 · 材质展示</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;color:#e9e6db;background:#10171c}*{box-sizing:border-box}body{margin:0}canvas{display:block;width:100vw;height:100dvh;touch-action:none;cursor:grab}canvas:active{cursor:grabbing}header,footer{position:fixed;z-index:1}header{top:clamp(18px,4vw,56px);left:clamp(18px,5vw,72px);pointer-events:none;text-shadow:0 2px 25px #000}h1{font-size:clamp(28px,4.2vw,62px);line-height:1.08;letter-spacing:-.045em;margin:0 0 12px}p{margin:0;color:#e2d8c3;font-size:13px}footer{bottom:20px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 24px);padding:8px;background:#10171ce8;border:1px solid #b7bec34d;border-radius:12px;display:flex;flex-wrap:wrap;justify-content:center;gap:4px}button{font:inherit;font-size:13px;color:inherit;border:1px solid transparent;background:none;padding:8px 11px;border-radius:6px;cursor:pointer}button:hover{background:#ffffff17}button[aria-pressed=true]{background:#d7ad75;color:#1a1510}button:focus-visible{outline:2px solid #f7d4a7}#status{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;text-align:center;z-index:2}
+</style>
+<body>
+<header><h1>雨后码头</h1></header>
+<p id="status" role="status">正在生成码头材质…</p>
+<footer aria-label="材质视角"><button data-view="0" aria-pressed="true">全景</button><button data-view="1">湿混凝土</button><button data-view="2">瓦楞钢板</button><button data-view="3">镀锌钢</button><button data-view="4">黑色橡胶</button><button data-view="5">木托盘</button><button data-view="6">金属铭牌</button><button id="spin" aria-pressed="true">自动旋转</button></footer>
+<script type="module">
+const status = document.querySelector('#status');
+try {
+const T = await import('https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js');
+const renderer = new T.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.45));
+renderer.toneMapping = T.ACESFilmicToneMapping;
+renderer.toneMappingExposure = .94;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = T.PCFSoftShadowMap;
+renderer.domElement.setAttribute('aria-label','交互式雨夜码头三维场景');
+document.body.prepend(renderer.domElement);
+const scene = new T.Scene();
+scene.background = new T.Color('#202e40');
+scene.fog = new T.FogExp2('#283748',.031);
+const camera = new T.PerspectiveCamera(43,1,.1,120);
+const V = (x,y,z) => new T.Vector3(x,y,z);
+const mix = (a,b,t) => a+(b-a)*t;
+const clamp = (n,a=0,b=1) => Math.max(a,Math.min(b,n));
+let seed = 24681357;
+function rand(){ seed = (Math.imul(seed,1664525)+1013904223)>>>0; return seed/4294967296; }
+function hash(x,y){ let k=Math.imul(x,374761393)+Math.imul(y,668265263); k=Math.imul(k^(k>>>13),1274126177);return ((k^(k>>>16))>>>0)/4294967295; }
+function noise(x,y){const i=Math.floor(x),j=Math.floor(y);let a=x-i,b=y-j;a=a*a*(3-2*a);b=b*b*(3-2*b);return mix(mix(hash(i,j),hash(i+1,j),a),mix(hash(i,j+1),hash(i+1,j+1),a),b);}
+function fbm(x,y){return .55*noise(x,y)+.28*noise(x*2.03+7,y*2.03)+.12*noise(x*4.1,y*4.1+9)+.05*noise(x*8.2,y*8.2);}
+function canvas(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;return c;}
+function texture(c,srgb=false){const tex=new T.CanvasTexture(c);if(srgb)tex.colorSpace=T.SRGBColorSpace;tex.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());return tex;}
+function materialMaps(w,h,sample){
+  const cs=[canvas(w,h),canvas(w,h),canvas(w,h),canvas(w,h)];
+  const ctx=cs.map(c=>c.getContext('2d'));
+  const images=ctx.map(c=>c.createImageData(w,h));
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const [r,g,b,rough,height,metal]=sample(x/w,y/h,hash(x,y));
+    const i=4*(y*w+x);
+    const values=[[r,g,b],[rough,rough,rough],[height,height,height],[metal,metal,metal]];
+    for(let m=0;m<4;m++){const data=images[m].data;data[i]=255*values[m][0];data[i+1]=255*values[m][1];data[i+2]=255*values[m][2];data[i+3]=255;}
+  }
+  ctx.forEach((c,i)=>c.putImageData(images[i],0,0));return cs;
+}
+function pbr(maps,repeatX,repeatY,bump,metalness=1){
+  const [map,roughnessMap,bumpMap,metalnessMap]=maps.map((c,i)=>{const t=texture(c,i===0);t.wrapS=t.wrapT=T.RepeatWrapping;t.repeat.set(repeatX,repeatY);return t;});
+  return new T.MeshStandardMaterial({map,roughnessMap,bumpMap,bumpScale:bump,metalnessMap,metalness,roughness:1});
+}
+const env = new T.Scene();
+env.background = new T.Color().setRGB(.12,.20,.34);
+function emitter(x,y,z,w,h,color){const m=new T.Mesh(new T.PlaneGeometry(w,h),new T.MeshBasicMaterial({color:new T.Color().setRGB(...color),side:T.DoubleSide}));m.position.set(x,y,z);m.lookAt(0,0,0);env.add(m);}
+emitter(0,5,-2,15,7,[.52,.83,1.45]); emitter(-5,2,4,3.5,1.1,[7.8,3.65,.95]); emitter(6,3,-6,6,2,[1.1,2.3,3.7]); emitter(0,-4,0,24,22,[.045,.05,.055]);
+const pmrem = new T.PMREMGenerator(renderer);
+scene.environment=pmrem.fromScene(env,.09,.1,30).texture;
+pmrem.dispose(); scene.environmentIntensity=.65;
+scene.add(new T.HemisphereLight(0xb4d5ff,0x615247,.85));
+const rim = new T.DirectionalLight(0xaecfff,.78);rim.position.set(7,10,-5);scene.add(rim);
+const solid=(color,roughness=.73,metalness=0)=>new T.MeshStandardMaterial({color,roughness,metalness});
+const steel=solid('#394248',.56,.68), trim=solid('#522b23',.58,.46), black=solid('#182024',.83), bolt=solid('#929ca2',.39,.84);
+function mesh(geometry,mat,x,y,z,parent=scene){const item=new T.Mesh(geometry,mat);item.position.set(x,y,z);item.castShadow=true;item.receiveShadow=true;parent.add(item);return item;}
+function box(w,h,d,x,y,z,mat,parent){return mesh(new T.BoxGeometry(w,h,d),mat,x,y,z,parent);}
+function tube(r,length,x,y,z,mat,parent){return mesh(new T.CylinderGeometry(r,r,length,16),mat,x,y,z,parent);}
+const floorMaps=materialMaps(512,512,(u,v,g)=>{const n=fbm(u*12,v*12), grit=fbm(u*115,v*115);const p=clamp(.29+n*.25+grit*.17+(g-.5)*.13);return [p,p*.97,p*.91,.57+n*.34,.25+.45*grit+.22*g,0];});
+const floorMat=pbr(floorMaps,20,17,.017,0);floorMat.envMapIntensity=.34;
+const ground=mesh(new T.PlaneGeometry(72,64),floorMat,0,-.012,0);ground.rotation.x=-Math.PI/2;ground.castShadow=false;
+const seam=solid('#323335',.92);
+for(let i=-5;i<=5;i++){
+  const a=box(.021,.002,35,i*3.1,-.009,0,seam);a.castShadow=false;
+  const b=box(39,.002,.021,0,-.009,i*3.4,seam);b.castShadow=false;
+}
+const paint=solid('#9d7c3a',.77);
+for(let i=-4;i<=6;i++){ const line=box(.09,.003,.78,4.72,-.007,i*1.3,paint);line.castShadow=false; }
+const containerMaps=materialMaps(1024,512,(u,v,g)=>{
+  const n=fbm(u*24,v*14), streak=fbm(u*95,v*2.9), micro=fbm(u*162,v*111);
+  const edge=Math.max(0,1-(1-v)*13)*.22 + Math.max(0,1-v*18)*.12;
+  const rust=clamp((n*.64+streak*.24+micro*.12+edge-.59)*10);
+  const key=.88+n*.18+streak*.12+(g-.5)*.075;
+  return [mix(.49*key,.32+micro*.24,rust),mix(.185*key,.064+micro*.14,rust),mix(.119*key,.025+micro*.05,rust),mix(.46+streak*.24,.88,rust),clamp(.42+micro*.29+rust*.25),mix(.14,.43,rust*(1-micro))];
+});
+{
+ const c=containerMaps[0].getContext('2d');
+ c.fillStyle='#d6c8a9';c.font='900 78px monospace';c.fillText('NORTH QUAY',93,150);c.font='bold 44px monospace';c.fillText('NQDU 480317 6',106,205);
+ c.font='bold 19px monospace';c.fillText('22G1   /   MAX GROSS 30 480 KG',108,242);
+ c.strokeStyle='#c7bb9d';c.lineWidth=3;c.strokeRect(108,258,122,37);c.font='bold 17px monospace';c.fillText('DRY CARGO',119,283);
+ c.save();c.beginPath();c.rect(92,90,550,207);c.clip();
+ for(let i=0;i<900;i++){const v=rand();c.fillStyle=v<.68?'#754435b0':'#4b29258f';c.fillRect(92+rand()*550,90+rand()*207,1+rand()*4,1+rand()*2);}
+ c.restore();
+}
+const oxidized=pbr(containerMaps,1,1,.017);
+const galvanized=pbr(materialMaps(384,384,(u,v,g)=>{
+ const x=u*22,y=v*22,ix=Math.floor(x),iy=Math.floor(y);let first=10,second=10,value=0;
+ for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++){
+  const a=ix+i,b=iy+j,d=(x-a-hash(a,b))**2+(y-b-hash(a+31,b+47))**2;
+  if(d<first){second=first;first=d;value=hash(a+15,b+12);}else if(d<second)second=d;
+ }
+ const edge=clamp((second-first)*9), t=.40+.29*value+.07*edge+g*.04;
+ return [t*.96,t,t*1.035,.25+.39*value,.35+.30*edge+.05*g,.92];
+}),2.55,1.1,.008);
+const rubber=pbr(materialMaps(256,256,(u,v,g)=>{const n=fbm(u*29,v*43), t=.061+n*.041+.017*g;return [t*.95,t,t*1.04,.83+.13*n,.40+n*.50,0];}),2,1,.007,0);
+const wood=pbr(materialMaps(512,192,(u,v,g)=>{
+ const bend=fbm(u*4,v*11), grain=fbm(u*6,v*170+bend*13), ring=.5+.5*Math.sin(v*176+bend*12);
+ const knot=clamp(1-Math.hypot((u-.65)*11,(v-.38)*4.6)), dark=clamp((grain-.48)*2.7+knot*.35);
+ const a=.47+.23*grain+.065*ring-.27*dark+(g-.5)*.07;
+ return [a,a*.72,a*.46,.61+.25*grain,.22+.58*grain,0];
+}),1,1,.01,0);
+function corrugated(width,height,panels){
+ const pos=[], uv=[], idx=[];const profile=[[0,0],[.16,0],[.28,.09],[.72,.09],[.84,0],[1,0]];
+ for(let i=0;i<panels;i++)for(let j=0;j<profile.length-1;j++){
+  const [a,az]=profile[j], [b,bz]=profile[j+1], u=(i+a)/panels,v=(i+b)/panels, n=pos.length/3;
+  pos.push(u*width-width/2,0,az,v*width-width/2,0,bz,v*width-width/2,height,bz,u*width-width/2,height,az);
+  uv.push(u,0,v,0,v,1,u,1);idx.push(n,n+1,n+2,n,n+2,n+3);
+ }
+ const geo=new T.BufferGeometry();geo.setAttribute('position',new T.Float32BufferAttribute(pos,3));geo.setAttribute('uv',new T.Float32BufferAttribute(uv,2));geo.setIndex(idx);geo.computeVertexNormals();return geo;
+}
+function container(x,y,z,rotation,mat,frame,len=8.5){
+ const g=new T.Group();scene.add(g);g.position.set(x,y,z);g.rotation.y=rotation;
+ box(len,2.66,2.29,0,1.33,-1.20,frame,g);
+ mesh(corrugated(len-.24,2.49,Math.round(len*3.1)),mat,0,.085,0,g);
+ for(const py of [.085,2.61])box(len+.08,.16,.18,0,py,.056,frame,g);
+ for(const px of [-len*.5,len*.5]){
+  box(.18,2.66,.18,px,1.33,.057,frame,g);
+  for(const py of [.12,2.56])box(.26,.24,.24,px,py,.067,steel,g);
+ }
+ const end=mesh(corrugated(2.29,2.45,8),mat,len*.5+.018,.12,-1.16,g);end.rotation.y=Math.PI/2;
+ for(const zz of [-.35,-.88,-1.47,-1.98]){
+  tube(.019,2.32,len*.5+.14,1.34,zz,steel,g);
+  for(const yy of [.34,2.3])box(.052,.13,.085,len*.5+.125,yy,zz,bolt,g);
+ }
+ return g;
+}
+container(-1.9,.04,-2.5,0,oxidized,trim,9.1);
+const blue=oxidized.clone();blue.color.set('#72a9bc');
+const distant=solid('#283c4b',.71,.28), distantRust=solid('#463531',.72,.20);
+container(-7.3,.03,-8.1,.12,blue,distant,8.2);
+container(-7.3,2.77,-8.1,.12,blue,distant,8.2);
+container(7.4,.03,-10.2,-.43,oxidized,distantRust,9.5);
+container(7.4,2.77,-10.2,-.43,blue,distant,9.5);
+container(16.8,.03,-20,-.38,blue,distant,9.5);
+for(let i=0;i<19;i++){
+ const x=-26+i*3.05,h=1+rand()*4.8;box(2+rand()*.7,h,3,x,h*.5,-31+rand()*4,distant);
+}
+function lamp(x,z,height,color,power){
+ tube(.083,height,x,height/2,z,steel);
+ box(.14,.13,1.45,x,height-.074,z+.55,steel);
+ box(.48,.20,.78,x,height-.15,z+1.12,steel);
+ box(.38,.028,.65,x,height-.264,z+1.12,new T.MeshBasicMaterial({color:new T.Color(color).multiplyScalar(3.1)}));
+ const s=new T.SpotLight(color,power,29,.92,.44,2);s.position.set(x,height-.32,z+1.12);s.target.position.set(x-.9,0,z+2.5);s.castShadow=true;s.shadow.mapSize.set(1024,1024);s.shadow.camera.near=.36;s.shadow.normalBias=.021;s.shadow.bias=-.00018;
+ scene.add(s,s.target);
+}
+lamp(-6.5,1.3,6.2,0xffb55c,1350);lamp(5.2,-5.7,6.5,0xffbd71,1500);lamp(12,-17,7.6,0xefac5c,1400);
+const fill=new T.PointLight(0xcfe4ff,18,9);fill.position.set(1.9,2.7,3.6);scene.add(fill);
+const rail = new T.Group();rail.position.set(2.9,0,1.75);rail.rotation.y=-.13;scene.add(rail);
+for(const x of [-1.22,1.22]){
+ box(.16,.045,.28,x,.026,0,galvanized,rail);box(.094,.78,.105,x,.43,0,galvanized,rail);
+ for(const z of [-.09,.09])tube(.018,.027,x,.066,z,bolt,rail);
+}
+for(const y of [.43,.77])box(2.64,.102,.106,0,y,0,galvanized,rail);
+box(.91,.21,.16,0,.47,.127,rubber,rail);
+for(let x=-.37;x<=.38;x+=.13)box(.064,.152,.029,x,.47,.221,rubber,rail);
+for(const x of [-.385,.385]){const pin=tube(.034,.026,x,.47,.22,bolt,rail);pin.rotation.x=Math.PI/2;}
+const tire=mesh(new T.TorusGeometry(.355,.105,14,44),rubber,4.35,.46,.61);tire.rotation.y=-.36;
+for(let i=0;i<28;i++){
+ const angle=i/28*Math.PI*2,d=.445;
+ const block=box(.061,.043,.13,4.35+Math.cos(angle)*d,.46+Math.sin(angle)*d,.62,rubber);block.rotation.z=angle+Math.PI/2;block.rotation.y=-.2;
+}
+const pallet=new T.Group();pallet.position.set(-.7,.01,1.02);pallet.rotation.y=.22;scene.add(pallet);
+for(const x of [-.52,0,.52]){
+ box(.123,.12,.97,x,.11,0,wood,pallet);
+ box(.148,.031,.99,x,.028,0,wood,pallet);
+}
+for(let i=0;i<6;i++){
+ const z=-.42+i*.168;
+ box(1.28,.054,.136,0,.198,z,wood,pallet);
+ for(const x of [-.52,0,.52])for(const offset of [-.035,.035])tube(.008,.004,x+.018,.227,z+offset,steel,pallet);
+}
+const plaqueMaps=materialMaps(512,256,(u,v,g)=>{
+ const n=fbm(u*17,v*13), s=fbm(u*12,v*250), patina=clamp((n-.53)*2.2);
+ return [mix(.73,.27,patina)+.09*s,mix(.54,.31,patina)+.07*s,mix(.29,.25,patina)+.03*s,.26+.5*patina+.13*g,.36+n*.25,.85-patina*.3];
+});
+{
+ const c=plaqueMaps[0].getContext('2d');c.strokeStyle='#493924';c.lineWidth=4;c.strokeRect(12,12,488,232);c.lineWidth=1.5;c.strokeRect(21,21,470,214);
+ c.fillStyle='#392c1d';c.textAlign='center';c.font='bold 39px serif';c.fillText('NORTH QUAY',256,94);c.font='bold 25px monospace';c.fillText('MOORING STATION',256,143);c.font='20px monospace';c.fillText('BERTH 04  /  EST. 1968',256,195);
+ for(let i=0;i<120;i++){const x=rand()*512,y=rand()*256;c.strokeStyle=i%3?'#edd29857':'#4e3a2461';c.lineWidth=.55+rand();c.beginPath();c.moveTo(x,y);c.lineTo(x+rand()*85,y+rand()*8-4);c.stroke();}
+}
+const plaque=pbr(plaqueMaps,1,1,.003);plaque.envMapIntensity=1.1;
+const sign=new T.Group();sign.position.set(2.6,1.13,-1.72);sign.rotation.y=-.24;scene.add(sign);
+box(.11,1.45,.13,0,-.40,-.11,galvanized,sign);box(.59,.078,.44,0,-1.086,-.11,steel,sign);
+box(.89,.49,.046,0,0,0,steel,sign);box(.86,.46,.026,0,0,.03,plaque,sign);
+for(const x of [-.39,.39])for(const y of [-.193,.193]){const screw=tube(.017,.013,x,y,.054,bolt,sign);screw.rotation.x=Math.PI/2;}
+const mirror = new T.PerspectiveCamera();
+const reflection = new T.WebGLRenderTarget(600, 400, {
+  type:T.HalfFloatType, generateMipmaps:true, minFilter:T.LinearMipmapLinearFilter,
+});
+const projection = new T.Matrix4();
+const clip = new T.Plane(V(0,1,0),-ground.position.y);
+const waterTime = {value:0};
+floorMat.onBeforeCompile = shader => {
+  Object.assign(shader.uniforms,{dockMirror:{value:reflection.texture},dockProjection:{value:projection},dockTime:waterTime});
+  shader.vertexShader = 'varying vec3 dockWorld;\n' + shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\ndockWorld=(modelMatrix*vec4(position,1.0)).xyz;');
+  shader.fragmentShader = [
+    'varying vec3 dockWorld;',
+    'uniform sampler2D dockMirror;',
+    'uniform mat4 dockProjection;',
+    'uniform float dockTime;',
+    'float pool(vec2 p,vec2 c,vec2 size){',
+    '  float edge=length((p-c)/size)+0.10*sin(p.x*8.0+p.y*5.3)+0.06*cos(p.y*14.0-p.x*8.4);',
+    '  return 1.0-smoothstep(0.84,1.04,edge);',
+    '}',
+  ].join('\n')+'\n'+shader.fragmentShader;
+  shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>',[
+    '#include <map_fragment>',
+    'vec2 p=dockWorld.xz;',
+    'float wet=pool(p,vec2(-2.9,2.1),vec2(2.65,1.20));',
+    'wet=max(wet,pool(p,vec2(0.65,4.6),vec2(3.45,1.32)));',
+    'wet=max(wet,pool(p,vec2(3.45,-0.85),vec2(2.12,0.97)));',
+    'wet=max(wet,pool(p,vec2(-4.2,-1.12),vec2(2.3,0.77)));',
+    'wet=max(wet,pool(p,vec2(3.2,2.7),vec2(1.14,0.56)));',
+    'diffuseColor.rgb*=mix(1.0,0.48,wet);',
+  ].join('\n')).replace('#include <roughnessmap_fragment>',[
+    '#include <roughnessmap_fragment>',
+    'roughnessFactor=mix(roughnessFactor,0.18,wet);',
+  ].join('\n')).replace('#include <normal_fragment_maps>',[
+    '#include <normal_fragment_maps>',
+    'normal=normalize(mix(normal,nonPerturbedNormal,wet*0.94));',
+  ].join('\n')).replace('#include <opaque_fragment>',[
+    'vec4 projected=dockProjection*vec4(dockWorld,1.0);',
+    'vec2 uvMirror=projected.xy/max(projected.w,0.0001)*0.5+0.5;',
+    'vec2 ripple=vec2(sin(p.x*19.0+p.y*12.0-dockTime),cos(p.x*13.0-p.y*17.0+dockTime));',
+    'vec3 reflected=textureLod(dockMirror,clamp(uvMirror+ripple*0.00125,0.002,0.998),mix(3.1,0.4,wet)).rgb;',
+    'float grazing=pow(1.0-abs(normalize(cameraPosition-dockWorld).y),4.0);',
+    'float strength=wet*(0.10+0.8*grazing);',
+    'outgoingLight=mix(outgoingLight,reflected,strength);',
+    '#include <opaque_fragment>',
+  ].join('\n'));
+};
+function renderReflection(focus){
+  const y=ground.position.y;
+  mirror.copy(camera,false);
+  mirror.position.y=2*y-camera.position.y;
+  mirror.up.set(0,-1,0);
+  mirror.lookAt(focus.x,2*y-focus.y,focus.z);
+  mirror.updateMatrixWorld();
+  projection.multiplyMatrices(mirror.projectionMatrix,mirror.matrixWorldInverse);
+  ground.visible=false;
+  renderer.clippingPlanes=[clip];
+  renderer.setRenderTarget(reflection);
+  renderer.render(scene,mirror);
+  renderer.setRenderTarget(null);
+  renderer.clippingPlanes=[];
+  ground.visible=true;
+}
+const views = [
+  [V(-.65,1.18,-.85),.47,.275,12.45], [V(-1,.12,2.25),.59,.23,7.1],
+  [V(-2.9,1.55,-2.48),.28,.10,4.85], [V(2.9,.49,1.75),.39,.37,2.94],
+  [V(4,.44,1.24),.56,.31,2.87], [V(-.7,.13,1.02),.57,.59,2.61],
+  [V(2.6,1.10,-1.70),-.13,.14,1.93],
+];
+const focus=views[0][0].clone();
+let view=0, yaw=views[0][1], pitch=views[0][2], radius=views[0][3];
+let targetYaw=yaw,targetPitch=pitch,targetRadius=radius;
+let drift=0,spin=!matchMedia('(prefers-reduced-motion: reduce)').matches;
+const spinButton=document.querySelector('#spin');
+spinButton.setAttribute('aria-pressed',spin);
+spinButton.addEventListener('click',()=>{spin=!spin;spinButton.setAttribute('aria-pressed',spin);});
+const buttons=[...document.querySelectorAll('[data-view]')];
+for(const button of buttons)button.addEventListener('click',()=>{
+  view=Number(button.dataset.view);
+  buttons.forEach(item=>item.setAttribute('aria-pressed',item===button));
+  [,targetYaw,targetPitch,targetRadius]=views[view];
+  drift=0;
+});
+const surface=renderer.domElement;
+let drag=null;
+surface.addEventListener('pointerdown',e=>{
+  if(drag || e.button!==0)return;
+  drag={id:e.pointerId,x:e.clientX,y:e.clientY};
+  surface.setPointerCapture(e.pointerId);
+});
+surface.addEventListener('pointermove',e=>{
+  if(drag?.id!==e.pointerId)return;
+  targetYaw=clamp(targetYaw+(drag.x-e.clientX)*.007,-1.22,1.22);
+  targetPitch=clamp(targetPitch+(e.clientY-drag.y)*.006,.065,1.1);
+  drag.x=e.clientX;drag.y=e.clientY;
+  drift=0;
+});
+for(const event of ['pointerup','pointercancel','lostpointercapture']){
+  surface.addEventListener(event,e=>{if(drag?.id===e.pointerId)drag=null;});
+}
+surface.addEventListener('wheel',e=>{
+  e.preventDefault();
+  targetRadius=clamp(targetRadius*Math.exp(e.deltaY*.001),Math.max(1.25,views[view][3]*.65),22);
+},{passive:false});
+function resize(){
+  camera.aspect=innerWidth/innerHeight;
+  camera.fov=camera.aspect<.85?57:43;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight,false);
+  const w=Math.min(680,Math.max(280,Math.round(innerWidth*.58)));
+  reflection.setSize(w,Math.min(680,Math.max(180,Math.round(w/camera.aspect))));
+}
+addEventListener('resize',resize);
+resize();
+let previous=performance.now(),first=true;
+renderer.setAnimationLoop(now=>{
+  const dt=Math.min(.1,Math.max(0,(now-previous)*.001));previous=now;
+  waterTime.value+=dt;
+  if(spin&&!drag)drift+=dt*.095;
+  const blend=1-Math.exp(-dt*6);
+  focus.lerp(views[view][0],blend);
+  yaw=mix(yaw,targetYaw,blend);pitch=mix(pitch,targetPitch,blend);radius=mix(radius,targetRadius,blend);
+  const a=yaw+Math.sin(drift)*.28, d=radius*Math.max(1,.90/camera.aspect);
+  camera.position.set(focus.x+Math.sin(a)*Math.cos(pitch)*d,focus.y+Math.sin(pitch)*d,focus.z+Math.cos(a)*Math.cos(pitch)*d);
+  camera.lookAt(focus);
+  try {
+    if(first){renderer.render(scene,camera);renderer.shadowMap.autoUpdate=false;}
+    renderReflection(focus);
+    renderer.render(scene,camera);
+    if(first){first=false;status.hidden=true;}
+  } catch(error) {
+    renderer.setAnimationLoop(null);
+    status.hidden=false;
+    status.textContent='场景渲染失败，请使用支持 WebGL 2 的浏览器。';
+    console.error(error);
+  }
+});
+} catch(error) {
+  status.textContent='无法启动场景，请检查 CDN 连接和浏览器的 WebGL 2 支持。';
+  console.error(error);
+}
+</script>
+</body>
+</html>

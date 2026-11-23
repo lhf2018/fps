@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <title>悬浮靶场 · Range 60</title>
+  </head>
+  <body>
+    <main id="range" aria-label="悬浮靶场">
+      <div class="hud">
+        <div class="identity"><span></span> RANGE 60</div>
+        <div class="stats">
+          <div><span>剩余时间</span><strong id="timer">60</strong></div>
+          <div><span>命中</span><strong id="score">00</strong></div>
+        </div>
+        <div class="ammo"><span>弹匣</span><strong id="ammo">08</strong><small> / 08</small></div>
+        <div id="crosshair" aria-hidden="true"></div>
+        <div id="hit" aria-hidden="true">×</div>
+      </div>
+      <section id="overlay" aria-labelledby="title">
+        <div class="panel">
+          <h1 id="title">悬浮靶场</h1>
+          <p id="result" hidden></p>
+          <button id="action" disabled>开始训练</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/game.js"></script>
+  </body>
+</html>
