@@ -5,3 +5,6 @@ Wall: https://polyhaven.com/a/concrete_wall_004
 Metal: https://polyhaven.com/a/green_metal_rust
 
 Each material uses the 1K JPG base color, OpenGL normal and roughness maps.
+
+Sky panorama: https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky
+The tonemapped panorama was resized and color graded for the dock.

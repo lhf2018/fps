@@ -54,9 +54,14 @@ function groundOcclusion(obstacles) {
   return new THREE.CanvasTexture(canvas);
 }
 
-export function createDock(renderer, scene) {
-  scene.background = new THREE.Color('#26374a');
-  scene.fog = new THREE.FogExp2('#26374a', 0.034);
+export async function createDock(renderer, scene) {
+  const sky = await new THREE.TextureLoader().loadAsync('/materials/dock-sky.jpg');
+  sky.colorSpace = THREE.SRGBColorSpace;
+  sky.mapping = THREE.EquirectangularReflectionMapping;
+  scene.background = sky;
+  scene.backgroundIntensity = 0.46;
+  scene.backgroundRotation.y = 1.4;
+  scene.fog = new THREE.FogExp2('#505f70', 0.031);
   scene.add(new THREE.HemisphereLight(0xb4d6ff, 0x514c44, 1.05));
   const moonlight = new THREE.DirectionalLight(0xb4d5ff, 0.64);
   moonlight.position.set(-8, 11, -12);
@@ -161,6 +166,38 @@ export function createDock(renderer, scene) {
       3.9, height, 2.9).castShadow = false;
   }
 
+  // One instanced mesh for the distant gantry, including the trolley and its cables.
+  const craneParts = [];
+  function beam(a, b, width, depth = width) {
+    const from = new THREE.Vector3(...a), to = new THREE.Vector3(...b);
+    const delta = to.clone().sub(from);
+    const scale = new THREE.Vector3(width, delta.length(), depth);
+    const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
+    craneParts.push(new THREE.Matrix4().compose(from.lerp(to, 0.5), rotation, scale));
+  }
+  for (const z of [-1, 1]) {
+    for (const x of [-4, 4]) {
+      beam([x * 1.3, 0, z * 2], [x, 12.3, z], 0.54);
+    }
+    beam([-8, 12.3, z], [13, 12.3, z], 0.35);
+    beam([-8, 13.8, z], [13, 13.8, z], 0.22);
+    for (let i = 0; i < 14; i++) {
+      const x = -8 + i * 1.5;
+      beam([x, i % 2 ? 13.8 : 12.3, z], [x + 1.5, i % 2 ? 12.3 : 13.8, z], 0.12);
+    }
+    beam([-4, 12.3, z], [-2, 18, z], 0.28);
+    beam([-2, 18, z], [10.5, 13.8, z], 0.10);
+    beam([-2, 18, z], [-7.5, 13.8, z], 0.10);
+    beam([6, 11.9, z * 0.5], [6, 6.4, z * 0.5], 0.045);
+  }
+  beam([5.6, 12, 0], [6.5, 12, 0], 0.74, 2.4);
+  beam([4.8, 6.4, 0], [7.2, 6.4, 0], 0.25, 1.6);
+  const gantry = new THREE.InstancedMesh(boxGeometry, solid('#4b4742', 0.79, 0.26), craneParts.length);
+  craneParts.forEach((matrix, index) => gantry.setMatrixAt(index, matrix));
+  gantry.position.set(-9.5, 0, -32);
+  gantry.rotation.y = -0.23;
+  scene.add(gantry);
+
   function lamp(x, z, height, reachX, reachZ, power, shadowSize) {
     const pole = tube(scene, galvanized, x, height / 2, z, 0.086, height);
     block(pole);
@@ -222,8 +259,8 @@ export function createDock(renderer, scene) {
   for (let i = -3; i <= 3; i++) box(rail, rubber, i * 0.106, 0.49, 0.216, 0.054, 0.148, 0.041);
   block(rail);
 
-  const tire = mesh(new THREE.TorusGeometry(0.36, 0.109, 14, 42), rubber, 6.35, 0.49, -3.9);
-  tire.rotation.y = -0.22;
+  const tire = mesh(new THREE.TorusGeometry(0.36, 0.109, 14, 42), rubber, 6.35, 0.103, -3.9);
+  tire.rotation.x = Math.PI / 2;
   block(tire);
 
   const sign = group(3.55, 0, -5.72, -0.08);
@@ -246,9 +283,7 @@ export function createDock(renderer, scene) {
   probe.position.set(0.8, 2.4, -6.5);
   probe.updateMatrixWorld(true);
   renderer.shadowMap.needsUpdate = true;
-  renderer.shadowMap.autoUpdate = false;
   probe.update(renderer, scene);
-  renderer.shadowMap.autoUpdate = true;
   const pmrem = new THREE.PMREMGenerator(renderer);
   const environment = pmrem.fromCubemap(probeTarget.texture);
   scene.environment = environment.texture;
