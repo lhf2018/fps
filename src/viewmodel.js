@@ -24,10 +24,10 @@ function wornFinish(cloth) {
   }
   ctx.putImageData(pixels, 0, 0);
   if (!cloth) {
-    ctx.lineWidth = 0.75;
-    for (let i = 0; i < 170; i++) {
+    ctx.lineWidth = 0.55;
+    for (let i = 0; i < 46; i++) {
       const x = noise() * 256, y = noise() * 256;
-      ctx.strokeStyle = i % 3 ? '#fff8' : '#25262988';
+      ctx.strokeStyle = i % 3 ? '#fff3' : '#25262930';
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x + 2 + noise() * 19, y + noise() * 4 - 2);
@@ -101,8 +101,17 @@ export async function createViewmodel() {
   const parts = new Map();
   const wear = new THREE.TextureLoader().load('/materials/metal-rough.jpg');
   const steelFinish = wornFinish(false);
-  const alloy = new THREE.MeshStandardMaterial({ color: '#687179', map: steelFinish, roughnessMap: wear, roughness: 0.83, metalness: 0.74 });
-  const dark = new THREE.MeshStandardMaterial({ color: '#41474b', map: steelFinish, roughnessMap: wear, roughness: 0.96, metalness: 0.54 });
+  const alloy = new THREE.MeshPhysicalMaterial({
+    color: '#515a64', map: steelFinish, roughnessMap: wear, roughness: 0.64, metalness: 0.72,
+    bumpMap: steelFinish, bumpScale: 0.00012, clearcoat: 0.21, clearcoatRoughness: 0.3,
+  });
+  const dark = new THREE.MeshStandardMaterial({
+    color: '#333c43', roughness: 0.48, metalness: 0.57, bumpMap: steelFinish, bumpScale: 0.0001,
+  });
+  const contact = new THREE.MeshStandardMaterial({ color: '#707981', roughness: 0.33, metalness: 0.76 });
+  const polymer = new THREE.MeshStandardMaterial({
+    color: '#444337', roughness: 0.87, bumpMap: steelFinish, bumpScale: 0.00035,
+  });
   const rubber = new THREE.MeshStandardMaterial({ color: '#171b1d', roughness: 0.93 });
   const weave = wornFinish(true);
   const fabric = new THREE.MeshStandardMaterial({ color: '#646451', map: weave, bumpMap: weave, bumpScale: 0.0005, roughness: 0.94 });
@@ -122,12 +131,12 @@ export async function createViewmodel() {
 
   shell(dark, 0, -0.015, 0.012, 0.106, 0.091, 0.32);
   shell(alloy, 0, 0.045, 0.004, 0.101, 0.065, 0.295, 0.028);
-  shell(wood, 0, -0.018, -0.281, 0.086, 0.076, 0.222, 0.024);
-  shell(wood, 0, 0.055, -0.292, 0.078, 0.045, 0.19, 0.019);
+  shell(polymer, 0, -0.018, -0.281, 0.086, 0.076, 0.222, 0.024);
+  shell(polymer, 0, 0.055, -0.292, 0.078, 0.045, 0.19, 0.019);
   shell(dark, 0, 0.007, -0.395, 0.085, 0.093, 0.027);
   part(wood, stockGeometry(), 0, 0, 0);
   shell(rubber, 0, -0.064, 0.426, 0.088, 0.144, 0.018, 0.013);
-  shell(wood, 0, -0.114, 0.073, 0.052, 0.126, 0.062, 0.018).rotation.x = -0.24;
+  shell(polymer, 0, -0.114, 0.073, 0.052, 0.126, 0.062, 0.018).rotation.x = -0.24;
 
   const frontTube = part(alloy, new THREE.CylinderGeometry(0.017, 0.017, 0.26, 16), 0, 0.026, -0.505);
   frontTube.rotation.x = Math.PI / 2;
@@ -139,7 +148,7 @@ export async function createViewmodel() {
   for (const side of [-1, 1]) {
     shell(dark, side * 0.019, 0.107, -0.098, 0.013, 0.020, 0.018, 0.003);
     for (const z of [-0.112, -0.079, 0.103]) {
-      const rivet = part(alloy, new THREE.CylinderGeometry(0.006, 0.006, 0.006, 10),
+      const rivet = part(contact, new THREE.CylinderGeometry(0.006, 0.006, 0.006, 10),
         side * 0.053, -0.012, z);
       rivet.rotation.z = Math.PI / 2;
     }
@@ -167,7 +176,10 @@ export async function createViewmodel() {
     shell(dark, side * 0.041, 0.142, -0.033, 0.009, 0.037, 0.039, 0.004);
   }
   const glass = new THREE.Mesh(new THREE.CircleGeometry(0.038, 40),
-    new THREE.MeshBasicMaterial({ color: 0x6cbaba, transparent: true, opacity: 0.085, depthWrite: false }));
+    new THREE.MeshPhysicalMaterial({
+      color: 0x649e9c, metalness: 0.24, roughness: 0.16, clearcoat: 1, clearcoatRoughness: 0.12,
+      transparent: true, opacity: 0.16, depthWrite: false,
+    }));
   glass.position.copy(sightCenter);
   glass.position.z -= 0.012;
   model.add(glass);
@@ -288,34 +300,50 @@ export async function createViewmodel() {
     alignSleeve(sleeve, elbow, left.root.position);
   }
   model.traverse(object => { if (object.isMesh) object.receiveShadow = true; });
-  const flare = document.createElement('canvas');
-  flare.width = flare.height = 128;
-  const ctx = flare.getContext('2d');
-  const glow = ctx.createRadialGradient(64, 64, 1, 64, 64, 57);
-  glow.addColorStop(0, '#fffad9');
-  glow.addColorStop(0.14, '#ffe99a');
-  glow.addColorStop(0.40, '#ff9f3966');
-  glow.addColorStop(1, '#ff6e1000');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, 128, 128);
-  ctx.beginPath();
-  for (let i = 0; i < 12; i++) {
-    const angle = i * Math.PI / 6;
-    const radius = i % 2 ? 6 : 26 + 13 * Math.sin(i * 3.1 + 1);
-    ctx.lineTo(64 + radius * Math.cos(angle), 64 + radius * Math.sin(angle));
+  const muzzle = new THREE.Group();
+  muzzle.position.set(0, 0.026, -0.635);
+  muzzle.visible = false;
+  model.add(muzzle);
+  // Three crossed sheets share a hot spine and taper into irregular orange tips.
+  const flareGeometry = new THREE.BufferGeometry();
+  const tip = [0.008, 0, -0.214];
+  flareGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    0, 0, 0, 0.033, 0, -0.041, 0, 0, -0.069,
+    0, 0, -0.069, 0.033, 0, -0.041, 0.022, 0, -0.092,
+    0, 0, -0.069, 0.022, 0, -0.092, ...tip,
+    0, 0, 0, 0, 0, -0.069, -0.029, 0, -0.054,
+    0, 0, -0.069, -0.014, 0, -0.126, -0.029, 0, -0.054,
+    0, 0, -0.069, ...tip, -0.014, 0, -0.126,
+  ], 3));
+  const white = new THREE.Color(0xffeed2);
+  const orange = new THREE.Color(0xe34d09).multiplyScalar(0.48);
+  const colors = [white, orange, white, white, orange, orange, white, orange, orange,
+    white, white, orange, white, orange, orange, white, orange, orange];
+  flareGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors.flatMap(color => color.toArray()), 3));
+  const flareMaterial = new THREE.MeshBasicMaterial({
+    vertexColors: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    transparent: true, depthWrite: false, toneMapped: false, forceSinglePass: true,
+  });
+  const sheets = Array.from({ length: 3 }, (_, i) => {
+    const sheet = new THREE.Mesh(flareGeometry, flareMaterial);
+    sheet.rotation.z = i * Math.PI / 3;
+    muzzle.add(sheet);
+    return sheet;
+  });
+  const light = new THREE.PointLight(0xffac64, 0, 3.4);
+  function setStrength(strength) {
+    muzzle.visible = strength > 0;
+    flareMaterial.opacity = strength;
+    light.intensity = 3.8 * strength * strength;
+    if (muzzle.visible) muzzle.getWorldPosition(light.position);
   }
-  ctx.closePath();
-  ctx.fill();
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: new THREE.CanvasTexture(flare), blending: THREE.AdditiveBlending, depthWrite: false,
-  }));
-  sprite.position.set(0, 0.026, -0.67);
-  sprite.scale.setScalar(0.22);
-  sprite.visible = false;
-  const light = new THREE.PointLight(0xffbc72, 0, 3);
-  light.position.copy(sprite.position);
-  light.layers.set(1);
-  model.add(sprite, light);
+  function ignite(aim) {
+    muzzle.rotation.z = Math.random() * Math.PI * 2;
+    const width = (0.85 + Math.random() * 0.3) * (1 - 0.4 * aim);
+    muzzle.scale.set(width, width, 0.82 + Math.random() * 0.35);
+    for (const sheet of sheets) sheet.scale.x = 0.8 + Math.random() * 0.45;
+    emitSmoke();
+  }
   const mist = document.createElement('canvas');
   mist.width = mist.height = 64;
   const brush = mist.getContext('2d');
@@ -337,12 +365,14 @@ export async function createViewmodel() {
   function emitSmoke() {
     const item = puffs[puffIndex];
     puffIndex = (puffIndex + 1) % puffs.length;
-    sprite.getWorldPosition(item.puff.position);
+    muzzle.getWorldPosition(item.puff.position);
     model.getWorldDirection(item.velocity).multiplyScalar(-0.55);
     item.velocity.y += 0.32;
     item.velocity.x += 0.10 * Math.random();
     item.age = 0;
     item.puff.material.rotation = Math.random() * Math.PI;
+    item.puff.scale.setScalar(0.055);
+    item.puff.material.opacity = 0.28;
     item.puff.visible = true;
   }
   function updateSmoke(dt) {
@@ -358,5 +388,6 @@ export async function createViewmodel() {
   function clearSmoke() {
     for (const { puff } of puffs) puff.visible = false;
   }
-  return { model, poseReload, sightCenter, flash: { sprite, light, smoke: puffs.map(item => item.puff), emitSmoke, updateSmoke, clearSmoke } };
+  return { model, poseReload, sightCenter, dot,
+    flash: { light, smoke: puffs.map(item => item.puff), ignite, setStrength, updateSmoke, clearSmoke } };
 }

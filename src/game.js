@@ -10,6 +10,11 @@ const overlay = document.querySelector('#overlay');
 const title = document.querySelector('#title');
 const result = document.querySelector('#result');
 const action = document.querySelector('#action');
+const settlement = document.querySelector('#settlement');
+const nextRound = document.querySelector('#next-round');
+const settlementError = document.querySelector('#settlement-error');
+const finalStats = ['score', 'hits', 'shots', 'accuracy']
+  .map(name => document.querySelector(`#final-${name}`));
 const timer = document.querySelector('#timer');
 const scoreLabel = document.querySelector('#score');
 const ammoLabel = document.querySelector('#ammo');
@@ -17,6 +22,7 @@ const hit = document.querySelector('#hit');
 const roundLength = 60_000;
 const capacity = 30;
 const shotInterval = 100;
+const flashDuration = 50;
 const crosshair = document.querySelector('#crosshair');
 const reloadDuration = 1250;
 const standingHeight = 1.7;
@@ -45,7 +51,7 @@ async function startGame() {
   const camera = new THREE.PerspectiveCamera(71, 1, 0.05, 60);
   camera.rotation.order = 'YXZ';
   scene.add(camera);
-  const [{ ground, obstacles, targetMaterial }, { model: blaster, poseReload, sightCenter, flash }] =
+  const [{ ground, obstacles, targetMaterial }, { model: blaster, poseReload, sightCenter, dot, flash }] =
     await Promise.all([createDock(renderer, scene), createViewmodel()]);
 
   const target = new THREE.Group();
@@ -62,7 +68,7 @@ async function startGame() {
   scene.add(target);
 
   camera.add(blaster);
-  scene.add(...flash.smoke);
+  scene.add(flash.light, ...flash.smoke);
   const viewmodelLight = new THREE.PointLight(0xc4dafc, 0.55, 1.1);
   viewmodelLight.position.set(-0.13, 0.04, -0.27);
   // The mirror camera only sees layer 0.
@@ -89,15 +95,20 @@ async function startGame() {
   let activeSince = 0;
   let score = 0;
   let ammo = capacity;
+  let shots = 0;
+  let lockRequest;
+  let lookPitch = 0;
+  let recoilPitch = 0;
   let refilledAt = 0;
   let nextShot = 0;
-  let fireTimer;
+  let fireHeld = false;
+  let firePressed = false;
   let aimHeld = false;
   let aim = 0;
   const aimedPosition = new THREE.Vector3();
   let hitUntil = 0;
   let kick = 0;
-  let flashAge = Infinity;
+  let flashStarted = -Infinity;
   let kickVelocity = 0;
   const turnLag = new THREE.Vector2();
   let breath = 0;
@@ -170,10 +181,11 @@ async function startGame() {
     aim = 0;
     flash.clearSmoke();
     fragments.clear();
-    elapsed = score = refilledAt = nextShot = hitUntil = kick = targetIndex = 0;
+    lookPitch = recoilPitch = shots = elapsed = score = refilledAt = nextShot = hitUntil = kick = targetIndex = 0;
     stride = strideWeight = reloadProgress = kickVelocity = landing = breath = 0;
     turnLag.set(0, 0);
-    flashAge = Infinity;
+    flashStarted = -Infinity;
+    flash.setStrength(0);
     eyeHeight = standingHeight;
     jumpHeight = verticalSpeed = 0;
     ammo = capacity;
@@ -187,13 +199,17 @@ async function startGame() {
   }
 
   function finish() {
+    if (state !== 'playing') return;
     state = 'finished';
     clearControls();
-    keys.clear();
     timer.textContent = '00';
     hit.style.opacity = '0';
     if (document.pointerLockElement === canvas) document.exitPointerLock();
-    showMenu('训练结束', '再来一局', `命中 ${score} 个悬浮靶`);
+    const accuracy = shots ? `${(100 * score / shots).toFixed(1)}%` : '—';
+    [score, score, shots, accuracy].forEach((value, i) => { finalStats[i].textContent = value; });
+    overlay.hidden = true;
+    settlementError.hidden = true;
+    settlement.hidden = false;
   }
 
   function reload(time) {
@@ -204,19 +220,16 @@ async function startGame() {
   }
 
   function fire(time) {
-    if (time >= roundLength || time < nextShot || refilledAt) return;
+    if (time >= roundLength || time < nextShot || refilledAt) return false;
     if (!ammo) {
       reload(time);
-      return;
+      return false;
     }
     ammo--;
+    shots++;
     updateAmmo();
     nextShot = time + shotInterval;
-    kickVelocity += 48;
-    flashAge = 0;
-    flash.sprite.material.rotation = Math.random() * Math.PI * 2;
-    flash.sprite.scale.setScalar((0.17 + Math.random() * 0.12) * (1 - 0.32 * aim));
-    flash.emitSmoke();
+    // Resolve the shot before adding its recoil to the current aim.
     shotSound();
     camera.updateMatrixWorld(true);
     ray.setFromCamera(center, camera);
@@ -234,51 +247,59 @@ async function startGame() {
       tone(530, 940, 0.12, 0.13);
     }
     if (!ammo) reload(time);
+    return true;
   }
 
   function clearControls() {
-    clearTimeout(fireTimer);
-    fireTimer = undefined;
-    aimHeld = false;
-  }
-  function heldFire() {
-    if (state !== 'playing' || document.pointerLockElement !== canvas) {
-      clearControls();
-      return;
-    }
-    const time = elapsed + performance.now() - activeSince;
-    if (time >= roundLength) return;
-    fire(time);
-    fireTimer = setTimeout(heldFire, Math.max(8, nextShot - time, refilledAt - time));
+    fireHeld = firePressed = aimHeld = false;
+    keys.clear();
   }
   canvas.addEventListener('contextmenu', event => event.preventDefault());
-  canvas.addEventListener('mousedown', event => {
+  window.addEventListener('mousedown', event => {
     if (state !== 'playing' || document.pointerLockElement !== canvas) return;
     if (event.button === 2) aimHeld = true;
-    if (event.button === 0 && fireTimer === undefined) heldFire();
+    if (event.button === 0) fireHeld = firePressed = true;
   });
   window.addEventListener('mouseup', event => {
     if (event.button === 2) aimHeld = false;
-    if (event.button === 0) {
-      clearTimeout(fireTimer);
-      fireTimer = undefined;
-    }
+    if (event.button === 0) fireHeld = false;
   });
 
-  action.addEventListener('click', async () => {
+  function lockFailed(request) {
+    if (!request || lockRequest !== request) return;
+    lockRequest = undefined;
+    request.button.disabled = false;
+    const message = request.state === 'finished' ? settlementError : result;
+    message.textContent = '浏览器未能锁定鼠标，请重试';
+    message.hidden = false;
+  }
+
+  async function requestLock(event) {
+    const button = event.currentTarget;
+    if (!event.isTrusted || lockRequest || state === 'playing' ||
+        (button === nextRound) !== (state === 'finished')) return;
+    const request = { button, state };
+    lockRequest = request;
+    button.disabled = true;
     try {
       await canvas.requestPointerLock();
     } catch {
-      showMenu('悬浮靶场', '重试', '浏览器未能锁定鼠标');
+      lockFailed(request);
     }
-  });
-  document.addEventListener('pointerlockerror', () => {
-    if (state !== 'playing') result.hidden = false;
-    result.textContent = '浏览器未能锁定鼠标';
-  });
+  }
+  action.addEventListener('click', requestLock);
+  nextRound.addEventListener('click', requestLock);
+  document.addEventListener('pointerlockerror', () => lockFailed(lockRequest));
   document.addEventListener('pointerlockchange', () => {
     if (document.pointerLockElement === canvas) {
+      if (!lockRequest || lockRequest.state !== state || document.hidden) {
+        if (state !== 'playing') document.exitPointerLock();
+        return;
+      }
+      lockRequest.button.disabled = false;
+      lockRequest = undefined;
       if (state !== 'paused') reset();
+      settlement.hidden = true;
       state = 'playing';
       activeSince = performance.now();
       overlay.hidden = true;
@@ -294,7 +315,6 @@ async function startGame() {
         return;
       }
       state = 'paused';
-      keys.clear();
       showMenu('训练暂停', '继续训练');
     }
   });
@@ -302,13 +322,22 @@ async function startGame() {
     if (state !== 'playing' || document.pointerLockElement !== canvas) return;
     const sensitivity = 0.0021 * (1 - 0.35 * aim);
     camera.rotation.y -= event.movementX * sensitivity;
-    camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - event.movementY * sensitivity, -1.42, 1.42);
+    lookPitch = THREE.MathUtils.clamp(lookPitch - event.movementY * sensitivity, -1.42, 1.42);
+    updatePitch();
     turnLag.x = THREE.MathUtils.clamp(turnLag.x + event.movementX * 0.00075, -0.095, 0.095);
     turnLag.y = THREE.MathUtils.clamp(turnLag.y + event.movementY * 0.0006, -0.07, 0.07);
   });
+  function updatePitch() {
+    camera.rotation.x = THREE.MathUtils.clamp(lookPitch + recoilPitch, -1.42, 1.42);
+  }
+
   const heldKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', ...crouchKeys]);
   window.addEventListener('keydown', event => {
     if (state !== 'playing' || document.pointerLockElement !== canvas) return;
+    if (event.code === 'Escape') {
+      document.exitPointerLock();
+      return;
+    }
     if (heldKeys.has(event.code)) {
       event.preventDefault();
       keys.add(event.code);
@@ -327,15 +356,19 @@ async function startGame() {
   window.addEventListener('keyup', event => keys.delete(event.code));
   window.addEventListener('blur', () => {
     clearControls();
-    keys.clear();
     if (document.pointerLockElement === canvas) document.exitPointerLock();
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) clearControls();
-    if (document.hidden && document.pointerLockElement === canvas) document.exitPointerLock();
+    if (!document.hidden) return;
+    clearControls();
+    lockFailed(lockRequest);
+    if (document.pointerLockElement === canvas) document.exitPointerLock();
   });
 
+  let renderTime = 0;
+  let needsRender = true;
   function resize() {
+    needsRender = true;
     const { clientWidth, clientHeight } = range;
     camera.aspect = clientWidth / clientHeight;
     camera.updateProjectionMatrix();
@@ -348,53 +381,58 @@ async function startGame() {
   reset();
   let lastFrame = performance.now();
   renderer.setAnimationLoop(now => {
-    const dt = Math.min(Math.max(0, now - lastFrame) / 1_000, 0.05);
+    const frameDt = Math.max(0, now - lastFrame) / 1000;
+    const dt = Math.min(frameDt, 0.05);
     lastFrame = now;
-    if (state === 'playing') {
-      const time = elapsed + performance.now() - activeSince;
-      if (time >= roundLength) {
-        finish();
-      } else {
-        timer.textContent = String(Math.ceil((roundLength - time) / 1_000)).padStart(2, '0');
-        if (refilledAt && time >= refilledAt) {
-          refilledAt = 0;
-          ammo = capacity;
-          updateAmmo();
-        }
-        hit.style.opacity = time < hitUntil ? '1' : '0';
-        if (jumpHeight || verticalSpeed) {
-          jumpHeight += (verticalSpeed - gravity * dt / 2) * dt;
-          verticalSpeed -= gravity * dt;
-          if (jumpHeight <= 0) {
-            landing = Math.min(1, -verticalSpeed / jumpSpeed);
-            jumpHeight = verticalSpeed = 0;
-          }
-        }
-        const airborne = jumpHeight > 0 || verticalSpeed > 0;
-        const crouching = !airborne && wantsToCrouch();
-        eyeHeight = THREE.MathUtils.damp(eyeHeight, crouching ? crouchingHeight : standingHeight, 18, dt);
-        camera.position.y = eyeHeight + jumpHeight;
-        movement.set(
-          Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')),
-          Number(keys.has('KeyS') || keys.has('ArrowDown')) - Number(keys.has('KeyW') || keys.has('ArrowUp')),
-        ).normalize().rotateAround(center, -camera.rotation.y).multiplyScalar((crouching ? 2.5 : 5) * dt);
-        const x = THREE.MathUtils.clamp(camera.position.x + movement.x, dockBounds.left, dockBounds.right);
-        const z = THREE.MathUtils.clamp(camera.position.z + movement.y, dockBounds.back, dockBounds.front);
-        const oldX = camera.position.x, oldZ = camera.position.z;
-        if (canStandAt(x, camera.position.z)) camera.position.x = x;
-        if (canStandAt(camera.position.x, z)) camera.position.z = z;
-        const distance = Math.hypot(camera.position.x - oldX, camera.position.z - oldZ);
-        const walking = !airborne && distance > 0.00001;
-        strideWeight = THREE.MathUtils.damp(strideWeight, Number(walking), 12, dt);
-        if (!airborne) stride += distance * (crouching ? 2.4 : 1.8);
-        reloadProgress = refilledAt ? 1 - (refilledAt - time) / reloadDuration : 0;
-        updateTarget(time);
+    const time = state === 'playing' ? elapsed + performance.now() - activeSince : elapsed;
+    if (state === 'playing' && time >= roundLength) finish();
+    if (state === 'paused' || state === 'finished') {
+      if (needsRender) {
+        reflection.render(camera, renderTime, true);
+        renderer.render(scene, camera);
+        needsRender = false;
       }
-    } else if (state === 'ready') {
+      return;
+    }
+    if (state === 'playing') {
+      timer.textContent = String(Math.ceil((roundLength - time) / 1_000)).padStart(2, '0');
+      if (refilledAt && time >= refilledAt) {
+        refilledAt = 0;
+        ammo = capacity;
+        updateAmmo();
+      }
+      hit.style.opacity = time < hitUntil ? '1' : '0';
+      if (jumpHeight || verticalSpeed) {
+        jumpHeight += (verticalSpeed - gravity * dt / 2) * dt;
+        verticalSpeed -= gravity * dt;
+        if (jumpHeight <= 0) {
+          landing = Math.min(1, -verticalSpeed / jumpSpeed);
+          jumpHeight = verticalSpeed = 0;
+        }
+      }
+      const airborne = jumpHeight > 0 || verticalSpeed > 0;
+      const crouching = !airborne && wantsToCrouch();
+      eyeHeight = THREE.MathUtils.damp(eyeHeight, crouching ? crouchingHeight : standingHeight, 18, dt);
+      camera.position.y = eyeHeight + jumpHeight;
+      movement.set(
+        Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')),
+        Number(keys.has('KeyS') || keys.has('ArrowDown')) - Number(keys.has('KeyW') || keys.has('ArrowUp')),
+      ).normalize().rotateAround(center, -camera.rotation.y).multiplyScalar((crouching ? 2.5 : 5) * dt);
+      const x = THREE.MathUtils.clamp(camera.position.x + movement.x, dockBounds.left, dockBounds.right);
+      const z = THREE.MathUtils.clamp(camera.position.z + movement.y, dockBounds.back, dockBounds.front);
+      const oldX = camera.position.x, oldZ = camera.position.z;
+      if (canStandAt(x, camera.position.z)) camera.position.x = x;
+      if (canStandAt(camera.position.x, z)) camera.position.z = z;
+      const distance = Math.hypot(camera.position.x - oldX, camera.position.z - oldZ);
+      const walking = !airborne && distance > 0.00001;
+      strideWeight = THREE.MathUtils.damp(strideWeight, Number(walking), 12, dt);
+      if (!airborne) stride += distance * (crouching ? 2.4 : 1.8);
+      reloadProgress = refilledAt ? 1 - (refilledAt - time) / reloadDuration : 0;
+      updateTarget(time);
+    } else {
       updateTarget(0);
       target.position.y += Math.sin(now / 500) * 0.2;
     }
-    const motionDt = state === 'playing' || state === 'ready' ? dt : 0;
     const aimGoal = Number(aimHeld && state === 'playing' && !refilledAt);
     aim = THREE.MathUtils.damp(aim, aimGoal, 18, dt);
     if (Math.abs(aim - aimGoal) < 0.001) aim = aimGoal;
@@ -403,15 +441,28 @@ async function startGame() {
       camera.fov = fov;
       camera.updateProjectionMatrix();
     }
-    crosshair.hidden = aim > 0.8;
-    breath += motionDt * 1.65;
-    turnLag.multiplyScalar(Math.exp(-11 * motionDt));
-    landing *= Math.exp(-12 * motionDt);
+    const sightWeight = Math.min(1, aim / 0.8);
+    dot.visible = crosshair.hidden = sightWeight === 1;
+    breath += dt * 1.65;
+    turnLag.multiplyScalar(Math.exp(-11 * dt));
+    landing *= Math.exp(-12 * dt);
     // Exact damped spring step keeps the impulse consistent at different render rates.
-    const phase = 24 * motionDt, decay = Math.exp(-16 * motionDt);
+    const recoilDt = Math.min(frameDt, 1);
+    const phase = 24 * recoilDt, decay = Math.exp(-16 * recoilDt);
     const springY = (kickVelocity + 16 * kick) / 24;
     kickVelocity = decay * (kickVelocity * Math.cos(phase) - (24 * kick + 16 * springY) * Math.sin(phase));
     kick = decay * (kick * Math.cos(phase) + springY * Math.sin(phase));
+    const fired = state === 'playing' && document.pointerLockElement === canvas &&
+      (fireHeld || firePressed) && fire(time);
+    firePressed = false;
+    recoilPitch *= Math.exp(-15 * recoilDt);
+    if (fired) {
+      const strength = 1 - 0.4 * aim;
+      kick = Math.min(1, kick + 0.31 * strength);
+      kickVelocity = Math.min(52 * strength, kickVelocity + 32 * strength);
+      recoilPitch = Math.min(0.034 * strength, recoilPitch + 0.022 * strength);
+    }
+    updatePitch();
     const tilt = THREE.MathUtils.smoothstep(reloadProgress, 0, 0.22)
       - THREE.MathUtils.smoothstep(reloadProgress, 0.73, 1);
     const bodyOffset = Math.min(0.265, camera.aspect * 0.27);
@@ -422,22 +473,27 @@ async function startGame() {
       -0.78 + kick * 0.058 - tilt * 0.055);
     blaster.rotation.set(0.09 + kick * 0.115 + turnLag.y + tilt * 0.14 - landing * 0.065,
       0.34 + turnLag.x + tilt * 0.14, -0.045 + horizontalBob * 0.017 - tilt * 0.36 + kick * 0.014);
-    const hipWeight = 1 - aim;
+    const hipWeight = 1 - sightWeight;
     blaster.rotation.set(blaster.rotation.x * hipWeight + aim * kick * 0.036,
       blaster.rotation.y * hipWeight, blaster.rotation.z * hipWeight);
     // Rotate around the optic center so the dot stays on the camera's hit ray.
     aimedPosition.copy(sightCenter).applyQuaternion(blaster.quaternion).negate();
-    aimedPosition.z -= 0.55 - kick * 0.028;
-    blaster.position.lerp(aimedPosition, aim);
+    aimedPosition.z -= 0.55 - kick * 0.058;
+    blaster.position.lerp(aimedPosition, sightWeight);
     poseReload(reloadProgress, bodyOffset);
-    flash.updateSmoke(motionDt);
-    fragments.update(motionDt);
-    reflection.render(camera, now);
-    const flashStrength = state === 'playing' ? Math.max(0, 1 - flashAge / 0.052) : 0;
-    flash.sprite.visible = flashStrength > 0;
-    flash.sprite.material.opacity = flashStrength;
-    flash.light.intensity = 2.4 * flashStrength * flashStrength;
-    flashAge += dt;
+    flash.updateSmoke(dt);
+    fragments.update(dt);
+    const wasLit = flash.light.intensity > 0;
+    if (fired) {
+      flashStarted = performance.now();
+      flash.ignite(aim);
+    }
+    const flashStrength = fired ? 1 : Math.max(0, 1 - (performance.now() - flashStarted) / flashDuration);
+    flash.setStrength(flashStrength);
+    renderTime = now;
+    needsRender = false;
+    // Both passes see the current pulse, including the frame where it goes dark.
+    reflection.render(camera, now, wasLit || flashStrength > 0);
     // Refresh the moving target's shadows at most 30 times per second on average.
     const nextShadowTick = Math.floor(now * 30 / 1000);
     renderer.shadowMap.needsUpdate = nextShadowTick !== shadowTick;

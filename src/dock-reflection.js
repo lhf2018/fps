@@ -82,9 +82,9 @@ export function createDockReflection(renderer, scene, ground, viewmodel) {
     lastRender = -Infinity;
   }
 
-  function render(camera, now) {
+  function render(camera, now, force = false) {
     time.value = now / 1000;
-    if (now - lastRender < 30) return;
+    if (!force && now - lastRender < 30) return;
     lastRender = now;
     camera.getWorldDirection(direction);
     lookAt.copy(camera.position).add(direction);

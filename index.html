@@ -25,6 +25,19 @@
           <button id="action" disabled>开始训练</button>
         </div>
       </section>
+      <section id="settlement" aria-labelledby="settlement-title" hidden>
+        <div class="panel">
+          <h1 id="settlement-title">本局结算</h1>
+          <dl>
+            <div><dt>最终得分</dt><dd id="final-score"></dd></div>
+            <div><dt>命中数</dt><dd id="final-hits"></dd></div>
+            <div><dt>开火数</dt><dd id="final-shots"></dd></div>
+            <div><dt>命中率</dt><dd id="final-accuracy"></dd></div>
+          </dl>
+          <p id="settlement-error" role="status" hidden></p>
+          <button id="next-round">开始下一局</button>
+        </div>
+      </section>
     </main>
     <script type="module" src="/src/game.js"></script>
   </body>

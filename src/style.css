@@ -26,6 +26,13 @@ strong { font-size: 31px; font-variant-numeric: tabular-nums; }
 #crosshair { width: 5px; height: 5px; background: white; border-radius: 50%; box-shadow: 0 0 0 2px #1119; }
 #hit { opacity: 0; color: var(--accent); font: 700 42px/1 system-ui; text-shadow: 0 0 9px #101811; }
 #overlay { position: absolute; z-index: 2; inset: 0; display: grid; align-items: end; justify-items: start; padding: 0 7% 11vh; background: #0b130e52; }
+#settlement { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; padding: 16px; background: #0b130e65; }
+#settlement .panel { width: min(100%, 430px); padding: 24px; background: #101915ed; }
+#settlement h1 { font-size: clamp(28px, 6vw, 42px); }
+#settlement dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0 0 20px; }
+#settlement dl div { padding: 10px 12px; background: #233028; }
+#settlement dt { font-size: 13px; color: #c4d1c8; }
+#settlement dd { margin: 3px 0 0; font-size: 28px; font-weight: 750; font-variant-numeric: tabular-nums; }
 .panel { max-width: 100%; border-left: 3px solid var(--accent); padding-left: 22px; text-shadow: 0 2px 16px #101711; }
 h1 { margin: 0 0 20px; font-size: 56px; line-height: 1.06; }
 p { margin: 0 0 18px; }
