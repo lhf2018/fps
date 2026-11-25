@@ -37,18 +37,32 @@ export async function loadHand(side) {
   const { position, normal, skinIndex, skinWeight } = mesh.geometry.attributes;
   const colors = [], base = new THREE.Color('#b77c61'), rosy = new THREE.Color('#d8957c');
   const tint = new THREE.Color();
+  const roughness = [];
+  const knuckle = new THREE.Color('#b96e5d');
   for (let i = 0; i < position.count; i++) {
-    let tips = 0;
+    let tips = 0, jointsWeight = 0;
     for (let k = 0; k < 4; k++) {
       const bone = mesh.skeleton.bones[skinIndex.getComponent(i, k)];
-      if (/distal|tip/.test(bone.name)) tips += skinWeight.getComponent(i, k);
+      const weight = skinWeight.getComponent(i, k);
+      if (/distal|tip/.test(bone.name)) tips += weight;
+      if (/proximal|intermediate/.test(bone.name)) jointsWeight += weight;
     }
     tint.copy(base).lerp(rosy, THREE.MathUtils.clamp(0.18 + normal.getX(i) * sign * 0.26 + tips * 0.42, 0, 1));
+    const palm = THREE.MathUtils.clamp(0.5 + sign * normal.getX(i) * 0.5, 0, 1);
+    tint.lerp(knuckle, jointsWeight * (1-palm) * 0.36);
+    roughness.push(0.69 + palm*0.12 - tips*0.07);
     colors.push(tint.r, tint.g, tint.b);
   }
   mesh.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   mesh.material.dispose();
   mesh.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.73 });
+  mesh.geometry.setAttribute('skinRoughness', new THREE.Float32BufferAttribute(roughness, 1));
+  mesh.material.onBeforeCompile = shader => {
+    shader.vertexShader = 'attribute float skinRoughness; varying float handRoughness;\n' +
+      shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nhandRoughness = skinRoughness;');
+    shader.fragmentShader = 'varying float handRoughness;\n' +
+      shader.fragmentShader.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = handRoughness;');
+  };
   mesh.frustumCulled = false;
   scene.position.copy(wrist.position).negate();
   const root = new THREE.Group();

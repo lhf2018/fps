@@ -3,6 +3,8 @@ import { createViewmodel } from './viewmodel.js';
 import { createDock, dockBounds } from './dock-scene.js';
 import { createDockReflection } from './dock-reflection.js';
 import { createTargetFragments } from './target-fragments.js';
+import { createTrainingTarget } from './training-target.js';
+import { createImpacts } from './impacts.js';
 import './style.css';
 
 const range = document.querySelector('#range');
@@ -51,20 +53,13 @@ async function startGame() {
   const camera = new THREE.PerspectiveCamera(71, 1, 0.05, 60);
   camera.rotation.order = 'YXZ';
   scene.add(camera);
-  const [{ ground, obstacles, targetMaterial }, { model: blaster, poseReload, sightCenter, dot, flash }] =
+  const [{ ground, obstacles, surfaces, targetMaterial }, { model: blaster, poseReload, sightCenter, dot, flash }] =
     await Promise.all([createDock(renderer, scene), createViewmodel()]);
 
-  const target = new THREE.Group();
-  const outer = new THREE.Mesh(new THREE.IcosahedronGeometry(0.59, 1), targetMaterial);
-  outer.castShadow = true;
-  outer.receiveShadow = true;
-  const targetFace = new THREE.MeshBasicMaterial({ color: '#c9fa76', toneMapped: false });
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.065, 10, 36), targetFace);
-  const core = new THREE.Mesh(new THREE.SphereGeometry(0.21, 16, 12), targetFace);
-  ring.position.z = 0.35;
-  core.position.z = 0.57;
-  target.add(outer, ring, core);
-  const fragments = createTargetFragments(scene, outer, ring, core);
+  const target = createTrainingTarget(targetMaterial);
+  const shootables = surfaces.concat(target.children);
+  const impacts = createImpacts(scene);
+  const fragments = createTargetFragments(scene, target);
   scene.add(target);
 
   camera.add(blaster);
@@ -83,7 +78,7 @@ async function startGame() {
   const center = new THREE.Vector2();
   const keys = new Set();
   const movement = new THREE.Vector2();
-  const obstruction = new THREE.Vector3();
+  ray.far = camera.far;
   const playerRadius = 0.30;
   const crouchKeys = ['KeyC', 'ControlLeft', 'ControlRight'];
   const wantsToCrouch = () => crouchKeys.some(code => keys.has(code));
@@ -94,6 +89,7 @@ async function startGame() {
   let elapsed = 0;
   let activeSince = 0;
   let score = 0;
+  let best = null;
   let ammo = capacity;
   let shots = 0;
   let lockRequest;
@@ -181,6 +177,7 @@ async function startGame() {
     aim = 0;
     flash.clearSmoke();
     fragments.clear();
+    impacts.clear();
     lookPitch = recoilPitch = shots = elapsed = score = refilledAt = nextShot = hitUntil = kick = targetIndex = 0;
     stride = strideWeight = reloadProgress = kickVelocity = landing = breath = 0;
     turnLag.set(0, 0);
@@ -207,6 +204,21 @@ async function startGame() {
     if (document.pointerLockElement === canvas) document.exitPointerLock();
     const accuracy = shots ? `${(100 * score / shots).toFixed(1)}%` : '—';
     [score, score, shots, accuracy].forEach((value, i) => { finalStats[i].textContent = value; });
+    try {
+      const stored = localStorage.getItem('range60.personalBest');
+      if (stored !== null && /^\d+$/.test(stored) && Number.isSafeInteger(Number(stored))) {
+        best = Math.max(best ?? 0, Number(stored));
+      }
+    } catch { /* Keep the in-memory record when storage is blocked. */ }
+    const previous = best;
+    best = Math.max(score, best ?? 0);
+    if (previous !== best) {
+      try { localStorage.setItem('range60.personalBest', String(best)); } catch { /* Session record survives. */ }
+    }
+    document.querySelector('#best-score').textContent = best;
+    document.querySelector('#record-change').textContent = previous === null ? '首次完成'
+      : score > previous ? `新纪录，提高 ${score-previous} 分`
+      : score === previous ? '追平纪录' : `距纪录 ${previous-score} 分`;
     overlay.hidden = true;
     settlementError.hidden = true;
     settlement.hidden = false;
@@ -233,12 +245,11 @@ async function startGame() {
     shotSound();
     camera.updateMatrixWorld(true);
     ray.setFromCamera(center, camera);
-    const [impact] = ray.intersectObjects(target.children);
-    const blocked = impact && obstacles.some(bounds =>
-      ray.ray.intersectBox(bounds, obstruction) &&
-      obstruction.distanceToSquared(camera.position) < impact.distance ** 2);
-    if (impact && !blocked) {
-      fragments.breakTarget(target, impact.point);
+    const [impact] = ray.intersectObjects(shootables, false);
+    const targetHit = impact?.object.parent === target;
+    if (impact) impacts.emit(impact, targetHit);
+    if (targetHit) {
+      fragments.breakTarget(target, impact.point, ray.ray.direction);
       score++;
       scoreLabel.textContent = String(score).padStart(2, '0');
       hitUntil = time + 170;
@@ -452,13 +463,14 @@ async function startGame() {
     const springY = (kickVelocity + 16 * kick) / 24;
     kickVelocity = decay * (kickVelocity * Math.cos(phase) - (24 * kick + 16 * springY) * Math.sin(phase));
     kick = decay * (kick * Math.cos(phase) + springY * Math.sin(phase));
+    impacts.update(frameDt);
     const fired = state === 'playing' && document.pointerLockElement === canvas &&
       (fireHeld || firePressed) && fire(time);
     firePressed = false;
     recoilPitch *= Math.exp(-15 * recoilDt);
     if (fired) {
-      const strength = 1 - 0.4 * aim;
-      kick = Math.min(1, kick + 0.31 * strength);
+      const strength = 1.3 * (1 - 0.4 * aim);
+      kick = Math.min(strength, kick + 0.31 * strength);
       kickVelocity = Math.min(52 * strength, kickVelocity + 32 * strength);
       recoilPitch = Math.min(0.034 * strength, recoilPitch + 0.022 * strength);
     }
@@ -483,6 +495,7 @@ async function startGame() {
     poseReload(reloadProgress, bodyOffset);
     flash.updateSmoke(dt);
     fragments.update(dt);
+
     const wasLit = flash.light.intensity > 0;
     if (fired) {
       flashStarted = performance.now();

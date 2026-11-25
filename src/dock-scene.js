@@ -63,7 +63,7 @@ export async function createDock(renderer, scene) {
   scene.backgroundRotation.y = 1.4;
   scene.fog = new THREE.FogExp2('#505f70', 0.031);
   scene.add(new THREE.HemisphereLight(0xb4d6ff, 0x514c44, 1.05));
-  const moonlight = new THREE.DirectionalLight(0xb4d5ff, 0.64);
+  const moonlight = new THREE.DirectionalLight(0xc1d8f3, 0.84);
   moonlight.position.set(-8, 11, -12);
   scene.add(moonlight);
 
@@ -78,6 +78,7 @@ export async function createDock(renderer, scene) {
   const lineMaterial = solid('#9e7841', 0.82);
   const seamMaterial = solid('#313637', 0.91);
   const obstacles = [];
+  const surfaces = [];
   const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
   const tubeGeometry = new THREE.CylinderGeometry(1, 1, 1, 14);
 
@@ -85,6 +86,9 @@ export async function createDock(renderer, scene) {
     const object = new THREE.Mesh(geometry, material);
     object.position.set(x, y, z);
     object.castShadow = object.receiveShadow = true;
+    object.userData.surface = [floor, seamMaterial, lineMaterial].includes(material) ? 'ground'
+      : material === wood || material === rubber ? 'soft' : 'metal';
+    surfaces.push(object);
     parent.add(object);
     return object;
   }
@@ -197,6 +201,7 @@ export async function createDock(renderer, scene) {
   gantry.position.set(-9.5, 0, -32);
   gantry.rotation.y = -0.23;
   scene.add(gantry);
+  surfaces.push(gantry);
 
   function lamp(x, z, height, reachX, reachZ, power, shadowSize) {
     const pole = tube(scene, galvanized, x, height / 2, z, 0.086, height);
@@ -216,7 +221,7 @@ export async function createDock(renderer, scene) {
       light.shadow.mapSize.set(shadowSize, shadowSize);
       light.shadow.camera.near = 0.45;
       light.shadow.camera.far = 24;
-      light.shadow.normalBias = 0.026;
+      light.shadow.normalBias = 0.015;
       light.shadow.bias = -0.00016;
       light.shadow.radius = 2.3;
     }
@@ -291,5 +296,5 @@ export async function createDock(renderer, scene) {
   pmrem.dispose();
   probeTarget.dispose();
 
-  return { ground, obstacles, targetMaterial: steel };
+  return { ground, obstacles, surfaces, targetMaterial: steel };
 }

@@ -216,10 +216,14 @@ export async function createViewmodel() {
   const sleeve = new THREE.Group();
   const cloth = part(fabric, new THREE.CylinderGeometry(0.035, 0.065, 0.94, 16), 0, 0.47, 0);
   cloth.scale.set(1, 0.99, 0.9);
-  part(rubber, new THREE.CylinderGeometry(0.032, 0.036, 0.07, 16), 0, 0.959, 0);
+  const cuff = part(fabric, new THREE.CylinderGeometry(0.035, 0.039, 0.12, 20), 0, 0.965, 0);
+  cuff.scale.z = 0.93;
+  part(rubber, new THREE.CylinderGeometry(0.033, 0.035, 0.026, 20), 0, 1.022, 0);
   for (const y of [0.30, 0.46, 0.78]) {
     const r = 0.065 - 0.032 * y;
-    part(fabric, new THREE.CylinderGeometry(r, r + 0.005, 0.055, 16), 0, y, 0).rotation.z = 0.01;
+    const fold = part(fabric, new THREE.CylinderGeometry(r - 0.001, r + 0.004, 0.048, 20), 0, y, 0);
+    fold.rotation.z = 0.04 * Math.sin(y * 20);
+    fold.scale.z = 0.92;
   }
   flushParts(sleeve);
   const rightSleeve = sleeve.clone();

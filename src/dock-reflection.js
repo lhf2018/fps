@@ -1,5 +1,14 @@
 import * as THREE from 'three';
 
+const basins = [[-2.8,-3.5,3.05,3.10], [2.25,-8.55,3.65,2.10], [0.7,-12.55,4.20,2.23],
+  [4.6,-0.7,2.35,1.40], [-6.5,-8.3,1.65,2.32], [-2.5,2.2,2.10,1.15]];
+
+export function isPuddle(x, z) {
+  const noise = 0.07 * Math.sin(x * 7.8 + z * 4.9) + 0.05 * Math.cos(z * 13 - x * 6.2)
+    + 0.023 * Math.sin(x * 20.3 + z * 19.4);
+  return basins.some(([cx, cz, w, h]) => Math.hypot((x-cx)/w, (z-cz)/h) + noise < 0.89);
+}
+
 export function createDockReflection(renderer, scene, ground, viewmodel) {
   const mirror = new THREE.PerspectiveCamera();
   const target = new THREE.WebGLRenderTarget(1, 1, {
@@ -41,12 +50,8 @@ export function createDockReflection(renderer, scene, ground, viewmodel) {
       .replace('#include <map_fragment>', [
         '#include <map_fragment>',
         'vec2 p = dockWorld.xz;',
-        'float wet = quayBasin(p, vec2(-2.8, -3.5), vec2(3.05, 3.10));',
-        'wet = max(wet, quayBasin(p, vec2(2.25, -8.55), vec2(3.65, 2.10)));',
-        'wet = max(wet, quayBasin(p, vec2(0.7, -12.55), vec2(4.20, 2.23)));',
-        'wet = max(wet, quayBasin(p, vec2(4.6, -0.7), vec2(2.35, 1.40)));',
-        'wet = max(wet, quayBasin(p, vec2(-6.5, -8.3), vec2(1.65, 2.32)));',
-        'wet = max(wet, quayBasin(p, vec2(-2.5, 2.2), vec2(2.10, 1.15)));',
+        'float wet = 0.0;',
+        ...basins.map(([x,z,w,h]) => `wet = max(wet, quayBasin(p, vec2(${x.toFixed(2)}, ${z.toFixed(2)}), vec2(${w.toFixed(2)}, ${h.toFixed(2)})));`),
         'float damp = smoothstep(0.0, 0.80, wet);',
         'diffuseColor.rgb *= mix(0.92, 0.41, damp);',
       ].join('\n'))
