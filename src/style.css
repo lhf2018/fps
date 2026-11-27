@@ -1,3 +1,4 @@
+.render-stats { position:absolute; z-index:5; bottom:14px; left:14px; padding:6px 9px; background:#081016dd; color:#dfefef; font:12px/1.4 monospace; pointer-events:none; }
 :root {
   color-scheme: dark;
   font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;

@@ -1,4 +1,4 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 import { RangeAudio } from './synth-audio.js';
 import { isPuddle } from './dock-reflection.js';
 import { createViewmodel } from './viewmodel.js';
@@ -7,6 +7,7 @@ import { createDockReflection } from './dock-reflection.js';
 import { createTargetFragments } from './target-fragments.js';
 import { createTrainingTarget } from './training-target.js';
 import { createImpacts } from './impacts.js';
+import { selectQuality, createPipeline } from './render-quality.js';
 import './style.css';
 
 const range = document.querySelector('#range');
@@ -46,7 +47,10 @@ function showMenu(heading, button, detail = '') {
 async function startGame() {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.06;
+  const quality = selectQuality(renderer);
+  renderer.toneMappingExposure = quality.exposure;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.info.autoReset = false;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.shadowMap.autoUpdate = false;
@@ -56,8 +60,8 @@ async function startGame() {
   const camera = new THREE.PerspectiveCamera(71, 1, 0.05, 450);
   camera.rotation.order = 'YXZ';
   scene.add(camera);
-  const [{ ground, obstacles, surfaces, targetMaterial, rainTime, updateHarbor }, { model: blaster, setVariant, poseReload, sightCenter, dot, flash }] =
-    await Promise.all([createDock(renderer, scene), createViewmodel()]);
+  const [{ ground, obstacles, surfaces, targetMaterial, rainTime, updateHarbor, environment }, { model: blaster, setVariant, poseReload, sightCenter, dot, flash }] =
+    await Promise.all([createDock(renderer, scene, quality), createViewmodel()]);
 
   const target = createTrainingTarget(targetMaterial);
   const shootables = surfaces.concat(target.children);
@@ -65,6 +69,7 @@ async function startGame() {
   const fragments = createTargetFragments(scene, target);
   scene.add(target);
 
+  blaster.traverse(part => part.layers.set(1));
   camera.add(blaster);
   scene.add(flash.light, ...flash.smoke);
   const viewmodelLight = new THREE.PointLight(0xc4dafc, 0.55, 1.1);
@@ -73,7 +78,26 @@ async function startGame() {
   viewmodelLight.layers.set(1);
   camera.layers.enable(1);
   camera.add(viewmodelLight);
-  const reflection = createDockReflection(renderer, scene, ground, blaster);
+  const reflection = createDockReflection(renderer, scene, ground, blaster, quality);
+  const pipeline = createPipeline(renderer, scene, camera, quality);
+  const debug = document.createElement('output');
+  debug.className = 'render-stats';
+  debug.hidden = true;
+  range.append(debug);
+  window.addEventListener('keydown', event => {
+    if (event.code === 'F3') { event.preventDefault(); debug.hidden = !debug.hidden; }
+  });
+  let frames = 0, sampledAt = 0;
+  function draw(now) {
+    pipeline.render(now);
+    frames++;
+    if (now - sampledAt >= 1000) {
+      const { calls, triangles } = renderer.info.render;
+      debug.textContent = `${quality.name}   ${Math.round(1000 * frames / (now - sampledAt))} FPS   ${calls} calls   ${triangles} tris`;
+      sampledAt = now;
+      frames = 0;
+    }
+  }
 
   const positions = [[0, 2, -8], [-3.7, 2.5, -11], [4.3, 1.4, -10],
     [-5.4, 1.35, -13], [2.2, 3.1, -14], [-1.7, 2.8, -12], [6, 2.7, -13]];
@@ -237,6 +261,7 @@ async function startGame() {
     camera.updateMatrixWorld(true);
     ray.setFromCamera(center, camera);
     const [impact] = ray.intersectObjects(shootables, false);
+    impacts.launch(blaster, flash.muzzle, ray.ray, impact?.distance ?? 25);
     const targetHit = impact?.object.parent === target;
     if (impact) impacts.emit(impact, targetHit);
     if (targetHit) {
@@ -292,7 +317,7 @@ async function startGame() {
     lockRequest = undefined;
     request.button.disabled = false;
     const message = request.state === 'finished' ? settlementError : result;
-    message.textContent = '浏览器未能锁定鼠标，请重试';
+    message.textContent = '鼠标未锁定。请点击窗口并重试，或在独立浏览器中打开游戏。';
     message.hidden = false;
   }
 
@@ -305,6 +330,11 @@ async function startGame() {
     button.disabled = true;
     try {
       await canvas.requestPointerLock();
+      if (document.pointerLockElement !== canvas) {
+        window.setTimeout(() => {
+          if (document.pointerLockElement !== canvas) lockFailed(request);
+        }, 1200);
+      }
     } catch {
       lockFailed(request);
     }
@@ -421,15 +451,37 @@ async function startGame() {
     const { clientWidth, clientHeight } = range;
     camera.aspect = clientWidth / clientHeight;
     camera.updateProjectionMatrix();
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.scale));
     renderer.setSize(clientWidth, clientHeight, false);
+    pipeline.resize(clientWidth, clientHeight, renderer.getPixelRatio());
     reflection.resize(clientWidth, clientHeight);
   }
   window.addEventListener('resize', resize);
+  window.addEventListener('pagehide', event => {
+    if (event.persisted) return;
+    renderer.setAnimationLoop(null);
+    reflection.dispose();
+    pipeline.dispose();
+    environment.dispose();
+    const resources = new Set();
+    scene.traverse(node => {
+      if (node.shadow) node.shadow.dispose();
+      if (node.geometry) resources.add(node.geometry);
+      if (node.skeleton) resources.add(node.skeleton);
+      for (const material of [].concat(node.material || [])) {
+        for (const value of Object.values(material)) if(value?.isTexture) resources.add(value);
+        for (const uniform of Object.values(material.uniforms || {})) if(uniform.value?.isTexture) resources.add(uniform.value);
+        resources.add(material);
+      }
+    });
+    for (const resource of resources) resource.dispose();
+    renderer.dispose();
+  });
   resize();
   reset();
   let lastFrame = performance.now();
   renderer.setAnimationLoop(now => {
+    renderer.info.reset();
     const frameDt = Math.max(0, now - lastFrame) / 1000;
     const dt = Math.min(frameDt, 0.05);
     lastFrame = now;
@@ -438,7 +490,7 @@ async function startGame() {
     if (state === 'paused' || state === 'finished') {
       if (needsRender) {
         reflection.render(camera, renderTime, true);
-        renderer.render(scene, camera);
+        draw(now);
         needsRender = false;
       }
       return;
@@ -574,7 +626,7 @@ async function startGame() {
     const nextShadowTick = Math.floor(now * 30 / 1000);
     renderer.shadowMap.needsUpdate = nextShadowTick !== shadowTick;
     shadowTick = nextShadowTick;
-    renderer.render(scene, camera);
+    draw(now);
   });
 
   if (!canvas.requestPointerLock || matchMedia('(pointer: coarse)').matches) {

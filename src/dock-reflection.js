@@ -1,6 +1,6 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 
-const basins = [[-2.8,-3.5,3.05,3.10], [2.25,-8.55,3.65,2.10], [0.7,-12.55,4.20,2.23],
+const basins = [[-.8,-1.9,3.3,2.65], [-2.8,-3.5,3.05,3.10], [2.25,-8.55,3.65,2.10], [0.7,-12.55,4.20,2.23],
   [4.6,-0.7,2.35,1.40], [-6.5,-8.3,1.65,2.32], [-2.5,2.2,2.10,1.15]];
 
 export function isPuddle(x, z) {
@@ -9,7 +9,7 @@ export function isPuddle(x, z) {
   return basins.some(([cx, cz, w, h]) => Math.hypot((x-cx)/w, (z-cz)/h) + noise < 0.89);
 }
 
-export function createDockReflection(renderer, scene, ground, viewmodel) {
+export function createDockReflection(renderer, scene, ground, viewmodel, quality) {
   const mirror = new THREE.PerspectiveCamera();
   const target = new THREE.WebGLRenderTarget(1, 1, {
     type: THREE.HalfFloatType,
@@ -70,11 +70,15 @@ export function createDockReflection(renderer, scene, ground, viewmodel) {
         'float wet = 0.0;',
         ...basins.map(([x,z,w,h]) => `wet = max(wet, quayBasin(p, vec2(${x.toFixed(2)}, ${z.toFixed(2)}), vec2(${w.toFixed(2)}, ${h.toFixed(2)})));`),
         'float damp = smoothstep(0.0, 0.80, wet);',
-        'diffuseColor.rgb *= mix(0.92, 0.41, damp);',
+        'float trackX = abs(abs(p.x + .13*p.y + .35*sin(p.y*.19)) - 1.12);',
+        'float tread = (1.-smoothstep(.075,.13,trackX))*smoothstep(-.4,.3,sin(p.y*39.+p.x*21.));',
+        'float oil = 1.-smoothstep(.3,1.1,length((p-vec2(2.5,-3.6))*vec2(1.3,.68))+.09*sin(8.*p.y));',
+        'diffuseColor.rgb *= mix(0.92, 0.46, damp)*(1.-.23*tread)*(1.-.42*oil);',
+        'diffuseColor.rgb += oil*.009*(.5+.5*cos(p.x*5.+p.y*2.+vec3(0.,2.,4.)));',
       ].join('\n'))
       .replace('#include <roughnessmap_fragment>', [
         '#include <roughnessmap_fragment>',
-        'roughnessFactor = mix(roughnessFactor, 0.16, damp);',
+        'roughnessFactor = mix(mix(roughnessFactor,.29,oil), .12+.06*(1.-wet), damp);',
       ].join('\n'))
       .replace('#include <normal_fragment_maps>', [
         '#include <normal_fragment_maps>',
@@ -89,7 +93,7 @@ export function createDockReflection(renderer, scene, ground, viewmodel) {
         '  float valid = step(0.001, projected.w) * smoothstep(0.0, 0.025, min(edge.x, edge.y));',
         '  vec3 reflection = textureLod(dockMirror, clamp(uvMirror, 0.001, 0.999), mix(3.1, 0.45, wet)).rgb;',
         '  float facing = abs(normalize(cameraPosition - dockWorld).y);',
-        '  float fresnel = 0.08 + 0.88 * pow(1.0 - facing, 4.0);',
+        '  float fresnel = 0.18 + 0.80 * pow(1.0 - facing, 2.7);',
         '  outgoingLight = mix(outgoingLight, reflection, wet * fresnel * valid);',
         '}',
         '#include <opaque_fragment>',
@@ -97,14 +101,14 @@ export function createDockReflection(renderer, scene, ground, viewmodel) {
   };
 
   function resize(width, height) {
-    const scale = Math.min(0.54, 700 / Math.max(width, height, 1));
+    const scale = Math.min(.75, quality.mirror / Math.max(width, height, 1));
     target.setSize(Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale)));
     lastRender = -Infinity;
   }
 
   function render(camera, now, force = false) {
     time.value = now / 1000;
-    if (!force && now - lastRender < 30) return;
+    if (!force && now - lastRender < 1000 / quality.mirrorHz) return;
     lastRender = now;
     camera.getWorldDirection(direction);
     lookAt.copy(camera.position).add(direction);
@@ -137,5 +141,5 @@ export function createDockReflection(renderer, scene, ground, viewmodel) {
     }
   }
 
-  return { resize, render };
+  return { resize, render, dispose: () => target.dispose() };
 }

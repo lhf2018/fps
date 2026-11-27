@@ -1,4 +1,4 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 import { createDockMaterials } from './dock-materials.js';
 import { createHarbor } from './dock-coast.js';
 
@@ -55,8 +55,12 @@ function groundOcclusion(obstacles) {
   return new THREE.CanvasTexture(canvas);
 }
 
-export async function createDock(renderer, scene) {
+export async function createDock(renderer, scene, quality) {
+  const [materials, panorama] = await Promise.all([createDockMaterials(renderer), new THREE.TextureLoader().loadAsync('/materials/dock-sky.jpg')]);
+  panorama.colorSpace = THREE.SRGBColorSpace;
+  panorama.wrapS = THREE.RepeatWrapping;
   const sky=new THREE.Mesh(new THREE.SphereGeometry(70,40,24), new THREE.ShaderMaterial({
+    uniforms:{panorama:{value:panorama}},
     side:THREE.BackSide,
     depthWrite:false,
     vertexShader:`
@@ -69,6 +73,7 @@ export async function createDock(renderer, scene) {
     `,
     fragmentShader:`
       varying vec3 direction;
+      uniform sampler2D panorama;
       float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
       float noise(vec2 p){
         vec2 i=floor(p),f=fract(p);
@@ -85,6 +90,8 @@ export async function createDock(renderer, scene) {
         float coldLight=pow(max(0.0,dot(d,normalize(vec3(0.48,0.58,-0.65)))),4.0);
         color+=vec3(0.046,0.078,0.119)*coldLight*smoothstep(0.26,0.77,textureNoise);
         color+=vec3(0.055,0.027,0.008)*pow(max(0.0,dot(d,vec3(-0.8,0.0,-0.6))),6.0)*horizon;
+        vec2 skyUV=vec2(atan(d.z,d.x)*0.159155+.5,asin(d.y)*.31831+.5);
+        color+=texture2D(panorama,skyUV).rgb*vec3(.14,.20,.28);
         gl_FragColor=vec4(color,1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -100,7 +107,12 @@ export async function createDock(renderer, scene) {
   scene.add(moonlight);
 
   const updateHarbor = createHarbor(scene);
-  const materials = createDockMaterials(renderer);
+  moonlight.castShadow = true;
+  moonlight.shadow.mapSize.setScalar(quality.shadow);
+  Object.assign(moonlight.shadow.camera,{left:-16,right:16,top:16,bottom:-16,near:.1,far:58});
+  moonlight.shadow.camera.updateProjectionMatrix();
+  moonlight.shadow.normalBias = .022;
+  moonlight.shadow.bias = -.0002;
   const { floor, galvanized, rubber, wood, plaque, rustRed, paintedBlue } = materials;
   const solid = (color, roughness, metalness = 0) =>
     new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -173,12 +185,21 @@ export async function createDock(renderer, scene) {
         box(root, hardware, length / 2 + 0.123, height, pin, 0.063, 0.13, 0.083);
       }
     }
+    box(root,hardware,length/2+.13,1.32,-1.17,.055,2.42,.027);
+    for (const z of [-.08,-2.24]) for (const h of [.45,1.42,2.27]) {
+      box(root,hardware,length/2+.15,h,z,.11,.09,.22);
+    }
+    for (const side of [-1,1]) for(const h of [.39,1.35,2.31]) {
+      const rivet=tube(root,hardware,side*(length/2-.025),h,.196,.031,.021);
+      rivet.rotation.x=Math.PI/2;
+    }
     if (y < 0.1) block(root);
   }
 
   const ground = mesh(new THREE.PlaneGeometry(floorWidth, floorDepth), floor, 0, -0.012, floorCenterZ);
   ground.rotation.x = -Math.PI / 2;
   ground.castShadow = false;
+  ground.geometry.setAttribute('uv2',ground.geometry.attributes.uv.clone());
   for (const x of [-9, -6, -3, 0, 3, 6, 9]) {
     box(scene, seamMaterial, x, -0.010, -7, 0.014, 0.002, 29).castShadow = false;
   }
@@ -235,17 +256,17 @@ export async function createDock(renderer, scene) {
   craneParts.forEach((matrix, index) => gantry.setMatrixAt(index, matrix));
   gantry.position.set(-9.5, 0, -32);
   gantry.rotation.y = -0.23;
+  gantry.castShadow = quality.name !== 'PERFORMANCE';
   scene.add(gantry);
   surfaces.push(gantry);
 
+  const hazeTime = {value:0};
   function lamp(x, z, height, reachX, reachZ, power, shadowSize) {
     const pole = tube(scene, galvanized, x, height / 2, z, 0.086, height);
     block(pole);
     box(scene, galvanized, x, height - 0.1, z + 0.52, 0.12, 0.12, 1.24);
     box(scene, steel, x, height - 0.14, z + 1.14, 0.51, 0.19, 0.79);
-    const emitter = new THREE.MeshBasicMaterial({
-      color: new THREE.Color().setRGB(5.8, 3.15, 0.91),
-    });
+    const emitter = new THREE.MeshStandardMaterial({color:0xffdb9b, emissive:0xffa35c, emissiveIntensity:6});
     const lens = box(scene, emitter, x, height - 0.245, z + 1.14, 0.39, 0.022, 0.66);
     lens.castShadow = false;
     const light = new THREE.SpotLight(0xffb45d, power, 25, 0.91, 0.62);
@@ -253,7 +274,7 @@ export async function createDock(renderer, scene) {
     light.target.position.set(reachX, 0, reachZ);
     light.castShadow = shadowSize > 0;
     if (light.castShadow) {
-      light.shadow.mapSize.set(shadowSize, shadowSize);
+      light.shadow.mapSize.setScalar(quality.shadow);
       light.shadow.camera.near = 0.45;
       light.shadow.camera.far = 24;
       light.shadow.normalBias = 0.015;
@@ -261,10 +282,22 @@ export async function createDock(renderer, scene) {
       light.shadow.radius = 2.3;
     }
     scene.add(light, light.target);
+    const axis = light.position.clone().sub(light.target.position);
+    const beam = new THREE.Mesh(new THREE.ConeGeometry(2.1,axis.length(),32,1,true),new THREE.ShaderMaterial({
+      transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.FrontSide,
+      uniforms:{clock:hazeTime},
+      vertexShader:'varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+      fragmentShader:`varying vec2 vUv; uniform float clock;
+        void main(){float a=pow(vUv.y,3.)*(1.-smoothstep(.96,1.,vUv.y));
+        a*=.78+.22*sin(40.*vUv.x+clock*.6+4.*vUv.y);gl_FragColor=vec4(.85,.43,.14,.078*a);}`
+    }));
+    beam.position.copy(light.target.position).addScaledVector(axis,.5);
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),axis.normalize());
+    scene.add(beam);
   }
 
-  lamp(-5.45, -5.6, 5.6, -1.7, -3.5, 535, 768);
-  lamp(5.95, -13.35, 6.4, 1.2, -9.9, 685, 1024);
+  lamp(-5.45, -5.6, 5.6, -1.7, -3.5, 300, 1024);
+  lamp(5.95, -13.35, 6.4, 1.2, -9.9, 420, 1024);
   lamp(-7.9, -20, 6.5, -3, -14, 580, 0);
   const bouncedLight = new THREE.PointLight(0x8ab9f1, 13, 11);
   bouncedLight.position.set(2.2, 2.8, -1.6);
@@ -315,7 +348,82 @@ export async function createDock(renderer, scene) {
     }
   }
   block(sign);
+  const amber = solid('#ce632c', .65);
+  const stripe = solid('#dad2ad', .56);
+  for (const [x,z] of [[4,-4.8],[-4.8,-7.1],[6.2,-9.1]]) {
+    const cone = group(x,0,z);
+    box(cone,rubber,0,.03,0,.43,.06,.43);
+    mesh(new THREE.ConeGeometry(.19,.65,20),amber,0,.36,0,cone);
+    mesh(new THREE.CylinderGeometry(.072,.10,.09,20),stripe,0,.38,0,cone);
+    block(cone);
+  }
+  for (const x of [-7.15,7.35]) {
+    box(scene,rubber,x,-.005,-3.5,.24,.018,10.4);
+    for (let i=0;i<72;i++) box(scene,galvanized,x,.008,1.6-i*.145,.23,.015,.053);
+  }
+  const cable = new THREE.CatmullRomCurve3([[-6,.04,1],[-6.7,.06,-1],[-6.2,.04,-3],[-5.8,.04,-4.7],[-5.45,.11,-5.6]].map(p=>new THREE.Vector3(...p)));
+  mesh(new THREE.TubeGeometry(cable,48,.022,7,false),rubber,0,0,0);
+  const cyan = new THREE.MeshStandardMaterial({color:0xbdeefa,emissive:0x58bcdb,emissiveIntensity:3.8});
+  for (let i=0;i<4;i++) {
+    const bay=group(-14+i*4.3,0,-23.5);
+    box(bay,materials.wall,0,1.38,0,4.25,2.76,.7);
+    box(bay,blueFrame,0,2.82,0,4.3,.14,.94);
+    box(bay,galvanized,0,1.45,.37,2.75,1.64,.10);
+    for(let j=0;j<6;j++) box(bay,blueFrame,0,.84+j*.23,.44,2.73,.035,.055);
+    box(bay,cyan,0,2.47,.45,1.64,.046,.09);
+  }
+  for(const [x,z] of [[-5.5,-8], [6.4,-14]]) {
+    const crate=group(x,0,z,.13*x);
+    box(crate,wood,0,.43,0,1.15,.86,.86);
+    for(const dx of [-.46,.46]) box(crate,galvanized,dx,.44,0,.045,.89,.88);
+    block(crate);
+  }
+  const vapor = new THREE.ShaderMaterial({
+    transparent:true, depthWrite:false, side:THREE.DoubleSide, uniforms:{clock:hazeTime},
+    vertexShader:'varying vec2 vUv; void main(){vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',
+    fragmentShader:`varying vec2 vUv;uniform float clock;
+      float hash(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.54);}
+      float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
+      void main(){vec2 p=vUv*vec2(6.,3.)-vec2(clock*.16,clock*.25);
+        float n=noise(p)*.6+noise(p*2.2)*.4;
+        float edge=1.-smoothstep(.15,.53,length((vUv-.5)*vec2(1.,.9)));
+        gl_FragColor=vec4(.49,.61,.65,edge*n*n*.24);}`
+  });
+  const veil = new THREE.PlaneGeometry(1,1);
+  for(const [x,y,z,w,h] of [[-4,.85,-11,6,1.7],[6,.7,-17,8,1.4],[-6,.44,-3,2.3,.9]]) {
+    const steam=new THREE.Mesh(veil,vapor);steam.position.set(x,y,z);steam.scale.set(w,h,1);scene.add(steam);
+  }
+  const serviceLight = new THREE.PointLight(0x73cce5,45,15);
+  serviceLight.position.set(-4,2.6,-20.8);
+  scene.add(serviceLight);
+
+  // Collision bounds are already captured. Keep the raycast surfaces on the same instances as the renderer.
+  scene.updateMatrixWorld(true);
+  const batches = new Map();
+  for (const item of surfaces) {
+    if (item.geometry !== boxGeometry && item.geometry !== tubeGeometry || item.isInstancedMesh) continue;
+    const key = [item.geometry.id,item.material.id,item.castShadow,item.userData.surface].join('/');
+    if (!batches.has(key)) batches.set(key,[]);
+    batches.get(key).push(item);
+  }
+  for (const items of batches.values()) {
+    if(items.length < 3) continue;
+    const first = items[0], batch = new THREE.InstancedMesh(first.geometry,first.material,items.length);
+    batch.castShadow = first.castShadow;
+    batch.receiveShadow = true;
+    batch.userData.surface = first.userData.surface;
+    items.forEach((item,i) => {
+      batch.setMatrixAt(i,item.matrixWorld);
+      item.removeFromParent();
+      surfaces.splice(surfaces.indexOf(item),1);
+    });
+    batch.computeBoundingSphere();
+    scene.add(batch);
+    surfaces.push(batch);
+  }
   floor.aoMap = groundOcclusion(obstacles);
+  floor.aoMap.channel = 2;
 
   // Capture the actual yard so metals pick up broad shapes and lamp colors.
   const probeTarget = new THREE.WebGLCubeRenderTarget(128, { type: THREE.HalfFloatType });
@@ -331,7 +439,7 @@ export async function createDock(renderer, scene) {
   pmrem.dispose();
   probeTarget.dispose();
 
-  const rainTime = { value: 0 };
+  const rainTime = hazeTime;
   const rainGeometry=new THREE.BufferGeometry();
   const rainPositions=[];
   const rainEnds=[];
@@ -375,5 +483,5 @@ export async function createDock(renderer, scene) {
   }));
   rain.frustumCulled=false;
   rain.layers.set(1);scene.add(rain);
-  return { ground, obstacles, surfaces, targetMaterial: steel, rainTime, updateHarbor };
+  return { ground, obstacles, surfaces, targetMaterial: steel, rainTime, updateHarbor, environment };
 }

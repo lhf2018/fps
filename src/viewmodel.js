@@ -1,7 +1,7 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 import { loadHand } from './hand-rig.js';
-import { RoundedBoxGeometry } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fbm } from './dock-materials.js';
 
 function wornFinish(cloth, colorSpace = THREE.SRGBColorSpace) {
@@ -193,6 +193,12 @@ export async function createViewmodel() {
 
   const frontTube = part(alloy, new THREE.CylinderGeometry(0.017, 0.017, 0.26, 16), 0, 0.026, -0.505);
   frontTube.rotation.x = Math.PI / 2;
+  part(contact,new THREE.TorusGeometry(.0175,.003,8,24),0,.026,-.614);
+  for(let i=0;i<6;i++) {
+    const a=i*Math.PI/3;
+    const lug=shell(dark,.016*Math.sin(a),.026+.016*Math.cos(a),-.623,.009,.009,.027,.002);
+    lug.rotation.z=-a;
+  }
   shell(dark, 0, 0.065, -0.556, 0.051, 0.087, 0.032);
   for (const side of [-1, 1]) {
     shell(alloy, side * 0.022, 0.111, -0.556, 0.012, 0.044, 0.031, 0.005);
@@ -237,7 +243,7 @@ export async function createViewmodel() {
   glass.position.z -= 0.012;
   model.add(glass);
   const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0017, 20),
-    new THREE.MeshBasicMaterial({ color: 0xff4932, toneMapped: false }));
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff4932).multiplyScalar(3.2) }));
   dot.position.copy(sightCenter);
   model.add(dot);
   // Continuous outer casings support the raised surface detail.
@@ -403,11 +409,11 @@ export async function createViewmodel() {
     arm.scale.y = wrist.length();
     arm.quaternion.setFromUnitVectors(up, wrist.normalize());
   }
-  const supportWrist = new THREE.Vector3(-0.108, -0.026, -0.226);
+  const supportWrist = new THREE.Vector3(-0.063, -0.074, -0.194);
   const magazineWrist = new THREE.Vector3(-0.059, -0.167, -0.106);
   const movingGrip = new THREE.Vector3();
   const supportRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-    Math.PI / 2, 0.04, Math.PI / 2, 'YXZ',
+    1.79, 0.26, 0.19, 'YXZ',
   ));
   const gripRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.22, 0.32, 0.14, 'YXZ'));
   const movingRotation = new THREE.Quaternion();
@@ -465,7 +471,7 @@ export async function createViewmodel() {
     0, 0, -0.069, -0.014, 0, -0.126, -0.029, 0, -0.054,
     0, 0, -0.069, ...tip, -0.014, 0, -0.126,
   ], 3));
-  const white = new THREE.Color(0xffeed2);
+  const white = new THREE.Color(0xffeed2).multiplyScalar(4.2);
   const orange = new THREE.Color(0xe34d09).multiplyScalar(0.48);
   const colors = [white, orange, white, white, orange, orange, white, orange, orange,
     white, white, orange, white, orange, orange, white, orange, orange];
@@ -539,5 +545,5 @@ export async function createViewmodel() {
     for (const { puff } of puffs) puff.visible = false;
   }
   return { model, setVariant, poseReload, sightCenter, dot,
-    flash: { light, smoke: puffs.map(item => item.puff), ignite, setStrength, updateSmoke, clearSmoke } };
+    flash: { muzzle, light, smoke: puffs.map(item => item.puff), ignite, setStrength, updateSmoke, clearSmoke } };
 }

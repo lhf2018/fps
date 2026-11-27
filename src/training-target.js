@@ -1,4 +1,4 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 
 export function createTrainingTarget(steel) {
   const target = new THREE.Group();
@@ -13,7 +13,7 @@ export function createTrainingTarget(steel) {
     return mesh;
   }
   function rim(radius, tube, z, material) {
-    part(new THREE.TorusGeometry(radius, tube, 8, 48), material, 0, 0, z);
+    part(new THREE.TorusGeometry(radius, tube, 10, 80), material, 0, 0, z);
   }
   const profile = [[0.415,-0.10],[0.53,-0.12],[0.57,-0.08],[0.57,0.09],[0.54,0.13],[0.42,0.13],[0.405,0.10],[0.415,-0.10]];
   const shell = new THREE.LatheGeometry(profile.map(([r,z]) => new THREE.Vector2(r,z)), 9, 0, Math.PI/3-0.045);
@@ -45,6 +45,11 @@ export function createTrainingTarget(steel) {
     const x = -Math.sin(angle), y = Math.cos(angle);
     part(bolt,edge,0.508*x,0.508*y,0.135);
     if (i%2 === 0) part(spoke,steel,0.32*x,0.32*y,-0.035).rotation.z = angle;
+  }
+  const indexMark = new THREE.BoxGeometry(.012,.038,.011);
+  for (let i=0;i<24;i++) {
+    const angle=i*Math.PI/12;
+    part(indexMark,i%3===0?marker:edge,-.49*Math.sin(angle),.49*Math.cos(angle),.14).rotation.z=angle;
   }
   return target;
 }

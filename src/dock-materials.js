@@ -1,4 +1,4 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import * as THREE from 'three';
 
 const { clamp, lerp } = THREE.MathUtils;
 const unit = value => clamp(value, 0, 1);
@@ -64,7 +64,20 @@ function paintPlaque(ctx, width, height) {
   }
 }
 
-export function createDockMaterials(renderer) {
+export async function createDockMaterials(renderer) {
+  const loader = new THREE.TextureLoader();
+  async function surface(name, repeatX, repeatY) {
+    const [map, normalMap, roughnessMap] = await Promise.all(['diff','nor_gl','rough'].map(async kind => {
+      const tex = await loader.loadAsync('/materials/' + name + '-' + kind + '.jpg');
+      tex.colorSpace = kind === 'diff' ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(repeatX, repeatY);
+      tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      return tex;
+    }));
+    return {map, normalMap, roughnessMap};
+  }
+  const [paving, concrete, sheet] = await Promise.all([surface('floor',16,14), surface('wall',2,1), surface('metal',2,1)]);
   const anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
 
   function material(width, height, sample, options = {}) {
@@ -127,7 +140,12 @@ export function createDockMaterials(renderer) {
     const shade = 0.24 + scale * 0.25 + grain * 0.18 + (grit - 0.5) * 0.13;
     return [shade, shade * 0.98, shade * 0.93, 0.62 + scale * 0.33, 0.21 + grain * 0.49 + grit * 0.23];
   }, { repeat: [18, 16], bumpScale: 0.016 });
-  floor.envMapIntensity = 0.42;
+  floor.map.dispose();
+  floor.roughnessMap.dispose();
+  Object.assign(floor, paving);
+  floor.normalScale.set(.64,.64);
+  floor.envMapIntensity = 0.68;
+  const wall = new THREE.MeshStandardMaterial({...concrete, color:0xa1acaf, roughness:.88});
 
   const galvanized = material(320, 320, (u, v, grit) => {
     const x = u * 21;
@@ -179,8 +197,11 @@ export function createDockMaterials(renderer) {
       0.35 + n * 0.3, 0.82 - 0.30 * tarnish];
   }, { bumpScale: 0.003, metalness: 1, paint: paintPlaque });
 
+  galvanized.map.dispose();
+  galvanized.roughnessMap.dispose();
+  Object.assign(galvanized,sheet);
   return {
-    floor, galvanized, rubber, wood, plaque,
+    floor, wall, galvanized, rubber, wood, plaque,
     rustRed: container([0.58, 0.26, 0.17], 'NORTH QUAY', 'NQDU 480317 6'),
     paintedBlue: container([0.23, 0.39, 0.47], 'PORT SERVICE', 'NQSU 710284 3'),
   };
