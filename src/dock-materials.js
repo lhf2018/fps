@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
 
 const { clamp, lerp } = THREE.MathUtils;
 const unit = value => clamp(value, 0, 1);
@@ -18,7 +18,7 @@ function noise(x, y) {
     lerp(hash(i, j + 1), hash(i + 1, j + 1), a), b);
 }
 
-function fbm(x, y) {
+export function fbm(x, y) {
   return 0.57 * noise(x, y) + 0.28 * noise(x * 2.03 + 7, y * 2.03)
     + 0.15 * noise(x * 4.1, y * 4.1 + 9);
 }

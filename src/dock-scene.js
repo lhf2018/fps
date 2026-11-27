@@ -1,10 +1,11 @@
-import * as THREE from 'three';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
 import { createDockMaterials } from './dock-materials.js';
+import { createHarbor } from './dock-coast.js';
 
 export const dockBounds = { left: -10, right: 10, back: -16.7, front: 5.3 };
-const floorWidth = 52;
-const floorDepth = 45;
-const floorCenterZ = -11;
+const floorWidth = 64;
+const floorDepth = 57;
+const floorCenterZ = -13;
 
 function corrugatedPanel(width, height) {
   const positions = [];
@@ -55,18 +56,50 @@ function groundOcclusion(obstacles) {
 }
 
 export async function createDock(renderer, scene) {
-  const sky = await new THREE.TextureLoader().loadAsync('/materials/dock-sky.jpg');
-  sky.colorSpace = THREE.SRGBColorSpace;
-  sky.mapping = THREE.EquirectangularReflectionMapping;
-  scene.background = sky;
-  scene.backgroundIntensity = 0.46;
-  scene.backgroundRotation.y = 1.4;
-  scene.fog = new THREE.FogExp2('#505f70', 0.031);
-  scene.add(new THREE.HemisphereLight(0xb4d6ff, 0x514c44, 1.05));
-  const moonlight = new THREE.DirectionalLight(0xc1d8f3, 0.84);
+  const sky=new THREE.Mesh(new THREE.SphereGeometry(70,40,24), new THREE.ShaderMaterial({
+    side:THREE.BackSide,
+    depthWrite:false,
+    vertexShader:`
+      varying vec3 direction;
+      void main(){
+        direction=position;
+        vec4 clip = projectionMatrix * vec4(mat3(viewMatrix) * position, 1.0);
+        gl_Position = clip.xyww;
+      }
+    `,
+    fragmentShader:`
+      varying vec3 direction;
+      float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float noise(vec2 p){
+        vec2 i=floor(p),f=fract(p);
+        f=f*f*(3.0-2.0*f);
+        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.0),f.x),f.y);
+      }
+      void main(){
+        vec3 d=normalize(direction);
+        float elevation=max(d.y,0.0);
+        vec2 clouds=d.xz/(0.28+elevation)*2.9;
+        float textureNoise=0.58*noise(clouds)+0.27*noise(clouds*2.2)+0.15*noise(clouds*5.4);
+        float horizon=exp(-elevation*5.7);
+        vec3 color=mix(vec3(0.011,0.023,0.047),vec3(0.020,0.035,0.056),horizon);
+        float coldLight=pow(max(0.0,dot(d,normalize(vec3(0.48,0.58,-0.65)))),4.0);
+        color+=vec3(0.046,0.078,0.119)*coldLight*smoothstep(0.26,0.77,textureNoise);
+        color+=vec3(0.055,0.027,0.008)*pow(max(0.0,dot(d,vec3(-0.8,0.0,-0.6))),6.0)*horizon;
+        gl_FragColor=vec4(color,1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }
+    `,
+  }));
+  sky.renderOrder=-10;
+  scene.add(sky);
+  scene.fog = new THREE.FogExp2('#263545', 0.0065);
+  scene.add(new THREE.HemisphereLight(0xb4d5ff, 0x615247, 0.64));
+  const moonlight = new THREE.DirectionalLight(0xaecfff, 0.67);
   moonlight.position.set(-8, 11, -12);
   scene.add(moonlight);
 
+  const updateHarbor = createHarbor(scene);
   const materials = createDockMaterials(renderer);
   const { floor, galvanized, rubber, wood, plaque, rustRed, paintedBlue } = materials;
   const solid = (color, roughness, metalness = 0) =>
@@ -160,13 +193,15 @@ export async function createDock(renderer, scene) {
   container(-8.65, 2.68, -5.15, Math.PI / 2, 10.4, paintedBlue, blueFrame);
   container(8.9, 0, -9.5, -Math.PI / 2, 10.6, paintedBlue, blueFrame);
   container(8.9, 2.68, -9.5, -Math.PI / 2, 10.6, rustRed, redFrame);
-  container(-4.85, 0, -18.2, 0, 9.5, paintedBlue, blueFrame);
-  container(4.8, 0, -18.2, 0, 9.3, rustRed, redFrame);
-  container(4.8, 2.68, -18.2, 0, 9.3, paintedBlue, blueFrame);
+  container(-13.4, 0, -18.2, 0, 9.5, paintedBlue, blueFrame);
+  container(13.4, 0, -18.2, 0, 9.3, rustRed, redFrame);
+  container(13.4, 2.68, -18.2, 0, 9.3, paintedBlue, blueFrame);
   container(1.7, 0, 8.2, Math.PI, 9.3, rustRed, redFrame);
   for (let i = 0; i < 12; i++) {
     const height = 2.5 + (i * 13 % 7) * 0.58;
-    box(scene, blueFrame, -26 + 4.6 * i, height / 2, -27 - (i % 4) * 1.6,
+    const side = i < 6 ? -1 : 1;
+    const x = side * (18 + (i % 6) * 5.2);
+    box(scene, blueFrame, x, height / 2, -27 - (i % 4) * 1.6,
       3.9, height, 2.9).castShadow = false;
   }
 
@@ -213,7 +248,7 @@ export async function createDock(renderer, scene) {
     });
     const lens = box(scene, emitter, x, height - 0.245, z + 1.14, 0.39, 0.022, 0.66);
     lens.castShadow = false;
-    const light = new THREE.SpotLight(0xffbb70, power, 25, 0.91, 0.62);
+    const light = new THREE.SpotLight(0xffb45d, power, 25, 0.91, 0.62);
     light.position.set(x, height - 0.30, z + 1.14);
     light.target.position.set(reachX, 0, reachZ);
     light.castShadow = shadowSize > 0;
@@ -296,5 +331,49 @@ export async function createDock(renderer, scene) {
   pmrem.dispose();
   probeTarget.dispose();
 
-  return { ground, obstacles, surfaces, targetMaterial: steel };
+  const rainTime = { value: 0 };
+  const rainGeometry=new THREE.BufferGeometry();
+  const rainPositions=[];
+  const rainEnds=[];
+  for(let i=0;i<2800;i++){
+    const x=(Math.random()-.5)*33,y=Math.random()*10,z=Math.random()*38-26;
+    rainPositions.push(x,y,z,x,y,z);
+    rainEnds.push(0,.12+Math.random()*.19);
+  }
+  rainGeometry.setAttribute('position',new THREE.Float32BufferAttribute(rainPositions,3));
+  rainGeometry.setAttribute('dropEnd',new THREE.Float32BufferAttribute(rainEnds,1));
+  const rain=new THREE.LineSegments(rainGeometry,new THREE.ShaderMaterial({
+    uniforms:{rainTime},
+    transparent:true,depthWrite:false,
+    vertexShader:`
+      attribute float dropEnd;
+      uniform float rainTime;
+      varying float opacity;
+      void main(){
+        float speed=9.5+fract(position.x*17.41)*4.5;
+        vec3 p=position;
+        p.y=mod(p.y-rainTime*speed,10.0);
+        p.x+=p.y*0.14;
+        p+=vec3(0.14,1.0,0.04)*dropEnd;
+        vec4 eye=modelViewMatrix*vec4(p,1.0);
+        float viewDistance=-eye.z;
+        float lamp=exp(-length((p.xz-vec2(-5.45,-4.46))*0.34))
+          +exp(-length((p.xz-vec2(5.95,-12.21))*0.32));
+        opacity=smoothstep(1.5,4.5,viewDistance)*(1.0-smoothstep(10.0,27.0,viewDistance));
+        opacity*=smoothstep(0.0,0.6,p.y)*(1.0-smoothstep(7.0,10.0,p.y))*(0.035+0.19*lamp);
+        opacity*=dropEnd>0.0?0.11:1.0;
+        gl_Position=projectionMatrix*eye;
+      }
+    `,
+    fragmentShader:`
+      varying float opacity;
+      void main(){
+        gl_FragColor=vec4(0.54,0.65,0.76,opacity);
+        #include <colorspace_fragment>
+      }
+    `,
+  }));
+  rain.frustumCulled=false;
+  rain.layers.set(1);scene.add(rain);
+  return { ground, obstacles, surfaces, targetMaterial: steel, rainTime, updateHarbor };
 }

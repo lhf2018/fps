@@ -1,11 +1,12 @@
-import * as THREE from 'three';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
 import { loadHand } from './hand-rig.js';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/utils/BufferGeometryUtils.js';
+import { fbm } from './dock-materials.js';
 
-function wornFinish(cloth) {
+function wornFinish(cloth, colorSpace = THREE.SRGBColorSpace) {
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 256;
+  canvas.width = canvas.height = 512;
   const ctx = canvas.getContext('2d');
   const pixels = ctx.createImageData(256, 256);
   let seed = 1729;
@@ -35,20 +36,41 @@ function wornFinish(cloth) {
     }
   }
   const map = new THREE.CanvasTexture(canvas);
-  map.colorSpace = THREE.SRGBColorSpace;
+  map.colorSpace = colorSpace;
   map.anisotropy = 4;
   return map;
 }
 
-function woodFinish() {
+function proceduralNormal() {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const pixels = ctx.createImageData(256, 256);
+  for (let y = 0; y < 256; y++) {
+    for (let x = 0; x < 256; x++) {
+      const offset = (y * 256 + x) * 4;
+      pixels.data[offset] = 128 + 10 * Math.sin(y * 0.72 + Math.sin(x * 0.09));
+      pixels.data[offset + 1] = 128 + 8 * Math.sin(x * 0.65 + y * 0.11);
+      pixels.data[offset + 2] = 250;
+      pixels.data[offset + 3] = 255;
+    }
+  }
+  ctx.putImageData(pixels, 0, 0);
+  return new THREE.CanvasTexture(canvas);
+}
+
+function woodFinish() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 768;
+  canvas.height = 384;
   const context = canvas.getContext('2d');
   const image = context.createImageData(256, 256);
   for (let y = 0; y < 256; y++) {
     for (let x = 0; x < 256; x++) {
-      const line = y + 3 * Math.sin(x / 67 + y / 18) + 1.3 * Math.sin(x / 22);
-      const grain = 12 * Math.sin(line * 0.36) + 7 * Math.sin(line * 1.41) + 5 * Math.cos(line * 2.19);
+      const warp = fbm(x / 240, y / 72);
+      const line = y + 19 * warp + 3 * Math.sin(x / 127 + y / 24);
+      const grain = 53 * (fbm(x / 105, line / 7) - .5)
+        + 23 * (fbm(x / 14, line * 1.2) - .5) - 16 * Math.pow(Math.abs(Math.sin(line * .13)), 12);
       const i = (y * 256 + x) * 4;
       image.data[i] = 151 + grain;
       image.data[i + 1] = 83 + grain * 0.66;
@@ -60,7 +82,8 @@ function woodFinish() {
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 4;
-  return new THREE.MeshStandardMaterial({ map, color: '#c2ab99', roughness: 0.52, bumpMap: map, bumpScale: 0.00035 });
+  return new THREE.MeshPhysicalMaterial({ map, color: '#b5a28d', roughness: .64, roughnessMap: map,
+    bumpMap: map, bumpScale: .00018, clearcoat: .2, clearcoatRoughness: .42 });
 }
 
 // Cross sections along the length of the stock, from its narrow neck to the heel.
@@ -99,25 +122,46 @@ export async function createViewmodel() {
   const [left, right] = await Promise.all([loadHand('left'), loadHand('right')]);
   const model = new THREE.Group();
   const parts = new Map();
-  const wear = new THREE.TextureLoader().load('/materials/metal-rough.jpg');
+  const coating = wornFinish(false);
+  const wear = wornFinish(false, THREE.NoColorSpace);
+  const normal = proceduralNormal();
+  for (const texture of [coating, normal, wear]) texture.anisotropy = 4;
   const steelFinish = wornFinish(false);
   const alloy = new THREE.MeshPhysicalMaterial({
-    color: '#515a64', map: steelFinish, roughnessMap: wear, roughness: 0.64, metalness: 0.72,
-    bumpMap: steelFinish, bumpScale: 0.00012, clearcoat: 0.21, clearcoatRoughness: 0.3,
+    color: '#606465', map: coating, roughnessMap: wear, roughness: .82, metalness: .79,
+    normalMap: normal, normalScale: new THREE.Vector2(.17, .17), vertexColors: true,
+    clearcoat: .10, clearcoatRoughness: .38,
   });
   const dark = new THREE.MeshStandardMaterial({
-    color: '#333c43', roughness: 0.48, metalness: 0.57, bumpMap: steelFinish, bumpScale: 0.0001,
+    color: '#424648', map: coating, roughness: .91, roughnessMap: wear, metalness: .58,
+    normalMap: normal, normalScale: new THREE.Vector2(.12, .12), vertexColors: true,
   });
   const contact = new THREE.MeshStandardMaterial({ color: '#707981', roughness: 0.33, metalness: 0.76 });
   const polymer = new THREE.MeshStandardMaterial({
-    color: '#444337', roughness: 0.87, bumpMap: steelFinish, bumpScale: 0.00035,
+    color: '#444337', map: coating, roughness: .96, roughnessMap: wear,
+    normalMap: normal, normalScale: new THREE.Vector2(.31, .31),
   });
-  const rubber = new THREE.MeshStandardMaterial({ color: '#171b1d', roughness: 0.93 });
+  const rubber = new THREE.MeshStandardMaterial({ color: '#232526', roughness: .92,
+    bumpMap: steelFinish, bumpScale: .00017 });
   const weave = wornFinish(true);
   const fabric = new THREE.MeshStandardMaterial({ color: '#646451', map: weave, bumpMap: weave, bumpScale: 0.0005, roughness: 0.94 });
   const wood = woodFinish();
 
   function part(surface, geometry, x, y, z) {
+    if (surface.vertexColors) {
+      const normals = geometry.attributes.normal;
+      const positions = geometry.attributes.position;
+      const colors = new Float32Array(normals.count * 3).fill(1);
+      if (geometry instanceof RoundedBoxGeometry) {
+        for (let i = 0; i < normals.count; i++) {
+          const bevel = 1 - Math.max(Math.abs(normals.getX(i)), Math.abs(normals.getY(i)), Math.abs(normals.getZ(i)));
+          const patch = fbm((positions.getZ(i) + z) * 64, (positions.getX(i) + x + positions.getY(i) + y) * 90);
+          const polish = bevel * 6 * patch;
+          colors.set([1 + polish, 1 + polish * .94, 1 + polish * .85], i * 3);
+        }
+      }
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    }
     const mesh = new THREE.Mesh(geometry, surface);
     mesh.position.set(x, y, z);
     if (!parts.has(surface)) parts.set(surface, []);
@@ -129,12 +173,21 @@ export async function createViewmodel() {
     return part(surface, new RoundedBoxGeometry(width, height, depth, 2, radius), x, y, z);
   }
 
+  const classicStock = new THREE.Mesh(stockGeometry(), wood);
+  const sandStock = new THREE.Group();
+  shell(alloy,0,-.005,.254,.051,.046,.195,.015);
+  shell(polymer,0,-.018,.341,.079,.069,.16,.014);
+  shell(polymer,0,-.073,.397,.083,.123,.052,.012);
+  shell(polymer,0,-.079,.325,.056,.035,.166,.009).rotation.x=.28;
+  flushParts(sandStock);
+  model.add(classicStock, sandStock);
+
   shell(dark, 0, -0.015, 0.012, 0.106, 0.091, 0.32);
   shell(alloy, 0, 0.045, 0.004, 0.101, 0.065, 0.295, 0.028);
   shell(polymer, 0, -0.018, -0.281, 0.086, 0.076, 0.222, 0.024);
   shell(polymer, 0, 0.055, -0.292, 0.078, 0.045, 0.19, 0.019);
   shell(dark, 0, 0.007, -0.395, 0.085, 0.093, 0.027);
-  part(wood, stockGeometry(), 0, 0, 0);
+
   shell(rubber, 0, -0.064, 0.426, 0.088, 0.144, 0.018, 0.013);
   shell(polymer, 0, -0.114, 0.073, 0.052, 0.126, 0.062, 0.018).rotation.x = -0.24;
 
@@ -187,6 +240,84 @@ export async function createViewmodel() {
     new THREE.MeshBasicMaterial({ color: 0xff4932, toneMapped: false }));
   dot.position.copy(sightCenter);
   model.add(dot);
+  // Continuous outer casings support the raised surface detail.
+  shell(dark,0,.023,-.27,.074,.048,.244,.012);
+  shell(alloy,0,.016,-.164,.086,.066,.046,.01);
+  shell(dark,0,.079,-.034,.064,.021,.101,.004);
+  const hood=part(dark,new THREE.CylinderGeometry(.043,.043,.034,64,1,true),0,sightCenter.y,-.033);
+  hood.rotation.x=Math.PI/2;
+  const lining=part(dark,new THREE.CylinderGeometry(.039,.039,.034,64,1,true),0,sightCenter.y,-.033);
+  lining.rotation.x=Math.PI/2;lining.scale.x=-1;
+  for(const side of [-1,1]){
+    shell(dark,side*.029,.119,-.034,.017,.037,.065,.005);
+    for(let i=0;i<6;i++){
+      shell(alloy,side*.038,.025,-.196-i*.033,.008,.018,.013,.003).rotation.x=.23;
+    }
+  }
+  // Cosmetic relief and surface markings, baked into material batches.
+  const inset=new THREE.MeshStandardMaterial({color:0x161b1b,roughness:.67});
+  const edge=new THREE.MeshStandardMaterial({color:0x717875,roughness:.51,metalness:.74});
+  for(const side of [-1,1]){
+    for(let i=0;i<8;i++){
+      const z=-.199-i*.025;
+      shell(inset,side*.043,-.004,z,.003,.016,.018,.002);
+      shell(polymer,side*.043,-.027,z,.006,.023,.006,.002);
+    }
+    for(let i=0;i<11;i++){
+      shell(rubber,side*.039,-.063+(i-5)*.01,.433,.011,.005,.008,.0015);
+    }
+    for(let i=0;i<6;i++){
+      shell(rubber,side*.025,-.12+(i-2.5)*.012,.076-(i-2.5)*.003,.004,.003,.043,.001);
+    }
+    for(const [y,z] of [[.026,-.127],[.025,.122],[-.03,.125],[-.039,-.129],[.096,-.052]]){
+      const x=side*(y>.09?.038:.053);
+      const head=part(edge,new THREE.CylinderGeometry(.005,.005,.003,16),x,y,z);
+      head.rotation.z=Math.PI/2;
+      const socket=part(inset,new THREE.CylinderGeometry(.0025,.0025,.0033,6),x+side*.0005,y,z);
+      socket.rotation.z=Math.PI/2;
+    }
+    for(let i=0;i<12;i++){
+      const z=-.188-i*.018;
+      shell(alloy,side*.018,.08,z,.029,.009,.01,.002);
+    }
+
+  }
+  for(let i=0;i<4;i++){
+    part(dark,new THREE.TorusGeometry(.0395,.0018,8,48),0,sightCenter.y,-.019-i*.008);
+  }
+  {
+    const dial=part(dark,new THREE.CylinderGeometry(.015,.015,.015,40),.046,sightCenter.y,-.033);
+    dial.rotation.z=Math.PI/2;
+    for(let k=0;k<24;k++){
+      const a=k*Math.PI/12;
+      shell(alloy,.049,sightCenter.y+.015*Math.cos(a),-.033+.015*Math.sin(a),.01,.002,.002,.0005);
+    }
+
+  }
+  const labelCanvas=document.createElement('canvas');
+  labelCanvas.width=768;labelCanvas.height=160;
+  const ctx=labelCanvas.getContext('2d');
+  ctx.fillStyle='#bfc1b9';ctx.font='bold 49px monospace';
+  ctx.font='24px monospace';ctx.fillText('FIELD SERIES   •   N° 0048',24,116);
+  for(let k=0;k<40;k++)ctx.fillRect(550+k*4,26,1+(k*k%3),56);
+  const ink=new THREE.CanvasTexture(labelCanvas);ink.colorSpace=THREE.SRGBColorSpace;
+  for(const side of [-1,1]){
+    const decal=new THREE.Mesh(new THREE.PlaneGeometry(.128,.026),
+      new THREE.MeshBasicMaterial({map:ink,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2}));
+    decal.rotation.y=side*Math.PI/2;decal.position.set(side*.0533,-.019,.027);model.add(decal);
+  }
+  function setVariant(variant) {
+    const modern = variant === 'sand';
+    classicStock.visible = !modern;
+    sandStock.visible = modern;
+    polymer.color.set(modern ? '#a5906d' : '#454a40');
+    ctx.clearRect(0, 0, 500, 70);
+    ctx.font = 'bold 49px monospace';
+    ctx.fillText(modern ? 'AX / 02' : 'AX / 01', 24, 62);
+    ink.needsUpdate = true;
+  }
+  setVariant('classic');
+
   flushParts(model);
 
   // A bevel catches the room lights along the curved magazine silhouette.
@@ -204,6 +335,9 @@ export async function createViewmodel() {
   part(dark, magazine, 0, 0, 0);
 
   for (const side of [-1, 1]) {
+    for(let i=0;i<4;i++){
+      shell(dark,side*.041,-.17,-.085-i*.018,.005,.131,.006,.002).rotation.x=.36;
+    }
     for (let i = 0; i < 5; i++) {
       shell(alloy, side * 0.038, -0.104 - i * 0.034, -0.105 - i * 0.014,
         0.008, 0.011, 0.085, 0.004).rotation.x = -i * 0.075;
@@ -212,7 +346,13 @@ export async function createViewmodel() {
 
   const mag = new THREE.Group();
   flushParts(mag);
-  model.add(mag, left.root);
+  // A separate carrier makes the final bolt-rack beat readable instead of moving the whole receiver.
+  const boltCarrier = new THREE.Group();
+  shell(dark, 0, 0.122, -0.145, 0.068, 0.038, 0.155, 0.006);
+  shell(alloy, 0.047, 0.139, -0.145, 0.018, 0.022, 0.086, 0.004);
+  shell(contact, -0.047, 0.139, -0.145, 0.018, 0.022, 0.086, 0.004);
+  flushParts(boltCarrier);
+  model.add(mag, boltCarrier, left.root);
   const sleeve = new THREE.Group();
   const cloth = part(fabric, new THREE.CylinderGeometry(0.035, 0.065, 0.94, 16), 0, 0.47, 0);
   cloth.scale.set(1, 0.99, 0.9);
@@ -263,10 +403,12 @@ export async function createViewmodel() {
     arm.scale.y = wrist.length();
     arm.quaternion.setFromUnitVectors(up, wrist.normalize());
   }
-  const supportWrist = new THREE.Vector3(-0.063, -0.074, -0.194);
+  const supportWrist = new THREE.Vector3(-0.108, -0.026, -0.226);
   const magazineWrist = new THREE.Vector3(-0.059, -0.167, -0.106);
   const movingGrip = new THREE.Vector3();
-  const supportRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.79, 0.26, 0.19, 'YXZ'));
+  const supportRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    Math.PI / 2, 0.04, Math.PI / 2, 'YXZ',
+  ));
   const gripRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(1.22, 0.32, 0.14, 'YXZ'));
   const movingRotation = new THREE.Quaternion();
   function poseReload(progress, bodyOffset = 0.31) {
@@ -275,16 +417,20 @@ export async function createViewmodel() {
     const release = ease(0.01, 0.095) - ease(0.25, 0.34)
       + ease(0.735, 0.81) - ease(0.925, 0.995);
     const draw = ease(0.345, 0.51) - ease(0.535, 0.73);
+    const boltTravel = ease(0.775, 0.84) - ease(0.91, 0.985);
     mag.position.set(-0.039 * draw, -0.155 * draw, -0.025 * draw);
     mag.rotation.x = -0.12 * draw;
+    boltCarrier.position.z = boltTravel * 0.082;
+    boltCarrier.rotation.x = -boltTravel * 0.045;
     movingGrip.copy(magazineWrist).applyQuaternion(mag.quaternion).add(mag.position);
     movingRotation.multiplyQuaternions(mag.quaternion, gripRotation);
     left.root.position.lerpVectors(supportWrist, movingGrip, travel);
     const clearance = 4 * travel * (1 - travel);
-    left.root.position.x -= 0.072 * clearance;
-    left.root.position.y -= 0.029 * clearance;
+    left.root.position.x -= 0.083 * clearance;
+    left.root.position.y -= 0.041 * clearance;
+    left.root.position.z += 0.018 * clearance;
     left.root.quaternion.slerpQuaternions(supportRotation, movingRotation, travel);
-    left.grip(0.82 + 0.29 * travel, release);
+    left.grip(0.93 + 0.17 * travel, release);
     model.updateMatrix();
     bodyToModel.copy(model.matrix).invert();
     shoulder.set(bodyOffset - 0.34, -0.40, -0.30).applyMatrix4(bodyToModel);
@@ -392,6 +538,6 @@ export async function createViewmodel() {
   function clearSmoke() {
     for (const { puff } of puffs) puff.visible = false;
   }
-  return { model, poseReload, sightCenter, dot,
+  return { model, setVariant, poseReload, sightCenter, dot,
     flash: { light, smoke: puffs.map(item => item.puff), ignite, setStrength, updateSmoke, clearSmoke } };
 }

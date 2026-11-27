@@ -1,4 +1,6 @@
-import * as THREE from 'three';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
+import { RangeAudio } from './synth-audio.js';
+import { isPuddle } from './dock-reflection.js';
 import { createViewmodel } from './viewmodel.js';
 import { createDock, dockBounds } from './dock-scene.js';
 import { createDockReflection } from './dock-reflection.js';
@@ -21,6 +23,7 @@ const timer = document.querySelector('#timer');
 const scoreLabel = document.querySelector('#score');
 const ammoLabel = document.querySelector('#ammo');
 const hit = document.querySelector('#hit');
+const impactFx = document.querySelector('#impact-fx');
 const roundLength = 60_000;
 const capacity = 30;
 const shotInterval = 100;
@@ -50,10 +53,10 @@ async function startGame() {
   const canvas = renderer.domElement;
   range.prepend(canvas);
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(71, 1, 0.05, 60);
+  const camera = new THREE.PerspectiveCamera(71, 1, 0.05, 450);
   camera.rotation.order = 'YXZ';
   scene.add(camera);
-  const [{ ground, obstacles, surfaces, targetMaterial }, { model: blaster, poseReload, sightCenter, dot, flash }] =
+  const [{ ground, obstacles, surfaces, targetMaterial, rainTime, updateHarbor }, { model: blaster, setVariant, poseReload, sightCenter, dot, flash }] =
     await Promise.all([createDock(renderer, scene), createViewmodel()]);
 
   const target = createTrainingTarget(targetMaterial);
@@ -103,6 +106,8 @@ async function startGame() {
   let aim = 0;
   const aimedPosition = new THREE.Vector3();
   let hitUntil = 0;
+  let lastImpactTime = -Infinity;
+  let impactCombo = 0;
   let kick = 0;
   let flashStarted = -Infinity;
   let kickVelocity = 0;
@@ -115,42 +120,15 @@ async function startGame() {
   let targetIndex = 0;
   let shadowTick = -1;
   let audio;
-  let shotNoise;
-  function shotSound() {
-    if (audio?.state !== 'running') return;
-    if (!shotNoise) {
-      shotNoise = audio.createBuffer(1, Math.ceil(audio.sampleRate * 0.19), audio.sampleRate);
-      const samples = shotNoise.getChannelData(0);
-      let low = 0;
-      for (let i = 0; i < samples.length; i++) {
-        const t = i / audio.sampleRate, white = Math.random() * 2 - 1;
-        low += 0.09 * (white - low);
-        samples[i] = white * Math.exp(-t * 134) + low * 1.6 * Math.exp(-t * 22);
-      }
-    }
-    const burst = audio.createBufferSource();
-    const volume = audio.createGain();
-    volume.gain.value = 0.32;
-    burst.buffer = shotNoise;
-    burst.playbackRate.value = 0.94 + Math.random() * 0.12;
-    burst.connect(volume).connect(audio.destination);
-    burst.start();
-    tone(135, 45, 0.10, 0.15, 'triangle');
-  }
-
-  function tone(from, to, length, volume, type = 'sine') {
-    if (audio?.state !== 'running') return;
-    const start = audio.currentTime;
-    const oscillator = audio.createOscillator();
-    const gain = audio.createGain();
-    oscillator.type = type;
-    oscillator.frequency.setValueAtTime(from, start);
-    oscillator.frequency.exponentialRampToValueAtTime(to, start + length);
-    gain.gain.setValueAtTime(volume, start);
-    gain.gain.exponentialRampToValueAtTime(0.001, start + length);
-    oscillator.connect(gain).connect(audio.destination);
-    oscillator.start(start);
-    oscillator.stop(start + length);
+  let sound;
+  let footstepDistance = 0;
+  let reloadSoundStarted = 0;
+  let reloadSoundsPlayed = 0;
+  let shotsSinceCasing = 0;
+  let nextRoundConfirmed = false;
+  let nextRoundConfirmTimer = 0;
+  function playSound(name) {
+    if (audio?.state === 'running') sound?.play(name);
   }
 
   function updateAmmo() {
@@ -180,6 +158,8 @@ async function startGame() {
     impacts.clear();
     lookPitch = recoilPitch = shots = elapsed = score = refilledAt = nextShot = hitUntil = kick = targetIndex = 0;
     stride = strideWeight = reloadProgress = kickVelocity = landing = breath = 0;
+    footstepDistance = 0;
+    reloadSoundStarted = reloadSoundsPlayed = shotsSinceCasing = 0;
     turnLag.set(0, 0);
     flashStarted = -Infinity;
     flash.setStrength(0);
@@ -193,11 +173,16 @@ async function startGame() {
     hit.style.opacity = '0';
     updateAmmo();
     updateTarget(0);
+    nextRoundConfirmed = false;
+    clearTimeout(nextRoundConfirmTimer);
+    nextRound.textContent = '开始下一局';
   }
 
   function finish() {
     if (state !== 'playing') return;
     state = 'finished';
+    sound?.stopMusic();
+    sound?.stopRain();
     clearControls();
     timer.textContent = '00';
     hit.style.opacity = '0';
@@ -221,6 +206,9 @@ async function startGame() {
       : score === previous ? '追平纪录' : `距纪录 ${previous-score} 分`;
     overlay.hidden = true;
     settlementError.hidden = true;
+    nextRoundConfirmed = false;
+    clearTimeout(nextRoundConfirmTimer);
+    nextRound.textContent = '开始下一局';
     settlement.hidden = false;
   }
 
@@ -228,7 +216,9 @@ async function startGame() {
     if (time >= roundLength || ammo === capacity || refilledAt) return;
     refilledAt = time + reloadDuration;
     updateAmmo();
-    tone(170, 85, 0.08, 0.08, 'triangle');
+    reloadSoundStarted = performance.now();
+    reloadSoundsPlayed = 1;
+    playSound('reload-out');
   }
 
   function fire(time) {
@@ -242,23 +232,44 @@ async function startGame() {
     updateAmmo();
     nextShot = time + shotInterval;
     // Resolve the shot before adding its recoil to the current aim.
-    shotSound();
+    playSound('shot-outdoor');
+    if (++shotsSinceCasing % 2 === 0 || Math.random() < .42) playSound('casing');
     camera.updateMatrixWorld(true);
     ray.setFromCamera(center, camera);
     const [impact] = ray.intersectObjects(shootables, false);
     const targetHit = impact?.object.parent === target;
     if (impact) impacts.emit(impact, targetHit);
     if (targetHit) {
+      impactFeedback(impact.point, time);
       fragments.breakTarget(target, impact.point, ray.ray.direction);
       score++;
       scoreLabel.textContent = String(score).padStart(2, '0');
       hitUntil = time + 170;
       targetIndex = (targetIndex + 1) % positions.length;
       updateTarget(time);
-      tone(530, 940, 0.12, 0.13);
+      playSound('ricochet');
+    } else if (impact && impact.object.userData.surface === 'metal' && Math.random() < .72) {
+      playSound('ricochet');
+    } else if (Math.random() < .28) {
+      playSound('whiz');
     }
     if (!ammo) reload(time);
     return true;
+  }
+
+  const impactScreen = new THREE.Vector3();
+  function impactFeedback(worldPoint, time) {
+    impactCombo = time - lastImpactTime < 1_050 ? impactCombo + 1 : 0;
+    lastImpactTime = time;
+    impactScreen.copy(worldPoint).project(camera);
+    const x = THREE.MathUtils.clamp((impactScreen.x * .5 + .5) * 100, 4, 96);
+    const y = THREE.MathUtils.clamp((-impactScreen.y * .5 + .5) * 100, 4, 96);
+    range.style.setProperty('--impact-x', x + '%');
+    range.style.setProperty('--impact-y', y + '%');
+    range.style.setProperty('--impact-power', String(Math.min(1.48, 1 + impactCombo * .13)));
+    range.classList.remove('impact-pulse');
+    void range.offsetWidth;
+    range.classList.add('impact-pulse');
   }
 
   function clearControls() {
@@ -299,7 +310,22 @@ async function startGame() {
     }
   }
   action.addEventListener('click', requestLock);
-  nextRound.addEventListener('click', requestLock);
+  nextRound.addEventListener('click', event => {
+    if (state !== 'finished') return;
+    if (!nextRoundConfirmed) {
+      nextRoundConfirmed = true;
+      nextRound.textContent = '确认开始下一局';
+      clearTimeout(nextRoundConfirmTimer);
+      nextRoundConfirmTimer = window.setTimeout(() => {
+        nextRoundConfirmed = false;
+        nextRound.textContent = '开始下一局';
+      }, 3500);
+      return;
+    }
+    nextRoundConfirmed = false;
+    clearTimeout(nextRoundConfirmTimer);
+    requestLock(event);
+  });
   document.addEventListener('pointerlockerror', () => lockFailed(lockRequest));
   document.addEventListener('pointerlockchange', () => {
     if (document.pointerLockElement === canvas) {
@@ -313,10 +339,14 @@ async function startGame() {
       settlement.hidden = true;
       state = 'playing';
       activeSince = performance.now();
+      sound?.startMusic();
       overlay.hidden = true;
       if (window.AudioContext) {
         audio ??= new AudioContext();
         void audio.resume().catch(() => {});
+        sound ??= new RangeAudio(audio);
+        sound.startRain(.105);
+        sound.startMusic();
       }
     } else if (state === 'playing') {
       clearControls();
@@ -326,6 +356,7 @@ async function startGame() {
         return;
       }
       state = 'paused';
+      sound?.stopMusic();
       showMenu('训练暂停', '继续训练');
     }
   });
@@ -378,6 +409,13 @@ async function startGame() {
 
   let renderTime = 0;
   let needsRender = true;
+  const rifleSelect = document.querySelector('#rifle');
+  setVariant(rifleSelect.value);
+  rifleSelect.disabled = false;
+  rifleSelect.addEventListener('change', () => {
+    setVariant(rifleSelect.value);
+    needsRender = true;
+  });
   function resize() {
     needsRender = true;
     const { clientWidth, clientHeight } = range;
@@ -412,6 +450,17 @@ async function startGame() {
         ammo = capacity;
         updateAmmo();
       }
+      if (refilledAt) {
+        const progress = (performance.now() - reloadSoundStarted) / reloadDuration;
+        if (reloadSoundsPlayed === 1 && progress >= .48) {
+          reloadSoundsPlayed = 2;
+          playSound('reload-in');
+        }
+        if (reloadSoundsPlayed === 2 && progress >= .79) {
+          reloadSoundsPlayed = 3;
+          playSound('reload-bolt');
+        }
+      }
       hit.style.opacity = time < hitUntil ? '1' : '0';
       if (jumpHeight || verticalSpeed) {
         jumpHeight += (verticalSpeed - gravity * dt / 2) * dt;
@@ -436,6 +485,18 @@ async function startGame() {
       if (canStandAt(camera.position.x, z)) camera.position.z = z;
       const distance = Math.hypot(camera.position.x - oldX, camera.position.z - oldZ);
       const walking = !airborne && distance > 0.00001;
+      if (walking) {
+        footstepDistance += distance;
+        const stepLength = crouching ? .94 : .68;
+        if (footstepDistance >= stepLength) {
+          footstepDistance %= stepLength;
+          const nearRail = Math.hypot(camera.position.x - 4.85, camera.position.z + 4.5) < 1.85;
+          playSound(isPuddle(camera.position.x, camera.position.z) ? 'step-water'
+            : nearRail ? 'step-metal' : 'step-concrete');
+        }
+      } else {
+        footstepDistance = 0;
+      }
       strideWeight = THREE.MathUtils.damp(strideWeight, Number(walking), 12, dt);
       if (!airborne) stride += distance * (crouching ? 2.4 : 1.8);
       reloadProgress = refilledAt ? 1 - (refilledAt - time) / reloadDuration : 0;
@@ -506,6 +567,8 @@ async function startGame() {
     renderTime = now;
     needsRender = false;
     // Both passes see the current pulse, including the frame where it goes dark.
+    rainTime.value = now / 1000;
+    updateHarbor(now / 1000);
     reflection.render(camera, now, wasLit || flashStrength > 0);
     // Refresh the moving target's shadows at most 30 times per second on average.
     const nextShadowTick = Math.floor(now * 30 / 1000);

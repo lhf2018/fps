@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" href="data:,">
+    <script type="importmap">
+      {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+    </script>
     <title>悬浮靶场 · Range 60</title>
   </head>
   <body>
@@ -17,11 +20,18 @@
         <div class="ammo"><span>弹匣</span><strong id="ammo">30</strong><small> / 30</small></div>
         <div id="crosshair" aria-hidden="true"></div>
         <div id="hit" aria-hidden="true">×</div>
+        <div id="impact-fx" aria-hidden="true"></div>
       </div>
       <section id="overlay" aria-labelledby="title">
         <div class="panel">
           <h1 id="title">悬浮靶场</h1>
           <p id="result" hidden></p>
+          <label class="rifle-picker">步枪型号
+            <select id="rifle" disabled>
+              <option value="classic">AX–01 · 胡桃木枪托</option>
+              <option value="sand">AX–02 · 沙色复合枪托</option>
+            </select>
+          </label>
           <button id="action" disabled>开始训练</button>
         </div>
       </section>
@@ -35,6 +45,7 @@
             <div><dt>命中率</dt><dd id="final-accuracy"></dd></div>
           </dl>
           <p class="record">个人最佳 <strong id="best-score"></strong><span id="record-change"></span></p>
+          <p class="settlement-hint">结算已保留，确认后才会开始下一局。</p>
           <p id="settlement-error" role="status" hidden></p>
           <button id="next-round">开始下一局</button>
         </div>
